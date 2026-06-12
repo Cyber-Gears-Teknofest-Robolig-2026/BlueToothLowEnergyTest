@@ -15,7 +15,7 @@ import {
   SafeAreaView,
 } from "react-native-safe-area-context";
 import { Buffer } from "buffer";
-import Icon from "react-native-vector-icons/MaterialCommunityIcons";
+import Icon from "@expo/vector-icons/MaterialCommunityIcons";
 import {
   KeyboardAvoidingView,
   KeyboardStickyView,

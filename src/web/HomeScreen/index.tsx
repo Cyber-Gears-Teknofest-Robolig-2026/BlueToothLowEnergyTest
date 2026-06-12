@@ -6,7 +6,7 @@ import {
   TouchableOpacity,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import Icon from '@expo/vector-icons/MaterialCommunityIcons';
 import styles from './styles';
 import { useNavigation } from '@react-navigation/native';
 import type { AppNavigationProp } from '../constants';
