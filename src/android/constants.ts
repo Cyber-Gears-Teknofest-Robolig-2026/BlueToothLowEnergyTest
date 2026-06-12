@@ -1,6 +1,15 @@
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
-import { BluetoothDevice } from "react-native-bluetooth-classic";
 import { create } from "zustand";
+
+// Minimal BLE-compatible device interface used across Android screens
+export interface BluetoothDevice {
+  id: string;
+  name?: string | null;
+  address?: string; // keep for compatibility with existing UI
+  write: (data: string) => Promise<void>;
+  disconnect: () => Promise<void>;
+  onDataReceived?: (cb: (event: { data: string }) => void) => { remove: () => void };
+}
 
 export type RootStackParamList = {
   Home: undefined;

@@ -17,7 +17,8 @@ import {
 } from "react-native";
 import { useState, useRef, useEffect } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import RNBluetoothClassic, { BluetoothDevice } from "react-native-bluetooth-classic";
+import { BleManager, Device } from 'react-native-ble-plx';
+import { Buffer } from 'buffer';
 import { 
   useSafeAreaInsets, 
   SafeAreaView 
@@ -27,8 +28,14 @@ import styles from './styles';
 import { useNavigation } from "@react-navigation/native";
 import { 
   AppNavigationProp,
-  useBluetoothStore 
+  useBluetoothStore,
+  BluetoothDevice,
 } from "../constants";
+
+// Nordic UART Service (common for BLE serial-like communication)
+const NUS_SERVICE = '6e400001-b5a3-f393-e0a9-e50e24dcca9e'.toLowerCase();
+const NUS_RX = '6e400002-b5a3-f393-e0a9-e50e24dcca9e'.toLowerCase(); // write (from client to device)
+const NUS_TX = '6e400003-b5a3-f393-e0a9-e50e24dcca9e'.toLowerCase(); // notify (from device to client)
 
 export default function BluetoothConnectionScreen() {
 
@@ -49,17 +56,25 @@ export default function BluetoothConnectionScreen() {
   const SNAP_PARTIAL = SCREEN_HEIGHT * 0.35; 
   const SNAP_CLOSED = SCREEN_HEIGHT;
 
-  const [devices, setDevices] = useState<BluetoothDevice[]>([]);
+  const [devices, setDevices] = useState<any[]>([]);
   const [modalVisible, setModalVisible] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
-  const [lastConnectedDevice, setLastConnectedDevice] = useState<BluetoothDevice | null>(null);
+  const [lastConnectedDevice, setLastConnectedDevice] = useState<any | null>(null);
 
   const panY = useRef(new Animated.Value(SNAP_CLOSED)).current;
   const currentSnapPoint = useRef(SNAP_CLOSED);
 
+  const managerRef = useRef<BleManager | null>(null);
+  const scanTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const monitorSubscriptionRef = useRef<any>(null);
+
   useEffect(() => {
+    managerRef.current = new BleManager();
     loadLastConnectedDevice();
+    return () => {
+      try { managerRef.current?.destroy(); } catch (e) {}
+    };
   }, []);
 
   const loadLastConnectedDevice = async () => {
@@ -69,16 +84,14 @@ export default function BluetoothConnectionScreen() {
         const lastDevice = JSON.parse(lastDeviceJson);
         setLastConnectedDevice(lastDevice);
       }
-    } catch (error) {
-    }
+    } catch (error) {}
   };
 
-  const saveLastConnectedDevice = async (device: BluetoothDevice) => {
+  const saveLastConnectedDevice = async (device: any) => {
     try {
       await AsyncStorage.setItem('lastConnectedDevice', JSON.stringify(device));
       setLastConnectedDevice(device);
-    } catch (error) {
-    }
+    } catch (error) {}
   };
 
   const panResponder = useRef(
@@ -116,27 +129,16 @@ export default function BluetoothConnectionScreen() {
       setModalVisible(false);
       currentSnapPoint.current = SNAP_CLOSED;
     });
-    try { RNBluetoothClassic.cancelDiscovery(); } catch (e) {}
+    try { managerRef.current?.stopDeviceScan(); } catch (e) {}
+    if (scanTimeoutRef.current) clearTimeout(scanTimeoutRef.current);
   };
 
   const openBluetoothModal = async () => {
-
-    try {
-      await RNBluetoothClassic.requestBluetoothEnabled();
-    } 
-    catch (error) {
-      Alert.alert('Hata', 'Bu ayara girilebilmesi için Bluetooth açık olmalıdır!');
-      return;
-    }
-
-    setModalVisible(true);
-    animateToPoint(SNAP_FULL);
-
-    setScanning(true);
-
+    // Request required permissions
     const permissionsResult = await PermissionsAndroid.requestMultiple([
       PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
       PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
+      PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
     ]);
 
     for (const [key, value] of Object.entries(permissionsResult)) {
@@ -146,50 +148,107 @@ export default function BluetoothConnectionScreen() {
       }
     }
 
-    await RNBluetoothClassic.cancelDiscovery();
+    setModalVisible(true);
+    animateToPoint(SNAP_FULL);
 
-    const bonded = await RNBluetoothClassic.getBondedDevices();
+    setScanning(true);
+    setDevices([]);
 
-    setDevices(bonded.map((d: any) => ({ ...d, bonded: true })));
+    const manager = managerRef.current!;
 
-    const discovered = await RNBluetoothClassic.startDiscovery();
+    manager.startDeviceScan(null, { allowDuplicates: false }, (error, device) => {
+      if (error) {
+        console.warn('Scan error', error);
+        setScanning(false);
+        return;
+      }
+      if (!device) return;
+      setDevices(prev => {
+        const found = prev.find(p => p.id === device.id);
+        if (found) return prev;
+        return [...prev, { id: device.id, name: device.name, address: device.id }];
+      });
+    });
 
-    const map = new Map();
-    [...bonded, ...discovered].forEach(d => map.set(d.address, { 
-      ...d, bonded: bonded.some(b => b.address === d.address) 
-    }));
-    setDevices(Array.from(map.values()));
-
-    setScanning(false);
+    // stop scan after 8s
+    if (scanTimeoutRef.current) clearTimeout(scanTimeoutRef.current);
+    scanTimeoutRef.current = setTimeout(() => {
+      try { manager.stopDeviceScan(); } catch (e) {}
+      setScanning(false);
+    }, 8000);
   };
 
-  const connectToDevice = async (device: BluetoothDevice) => {
-    try {
-      await RNBluetoothClassic.requestBluetoothEnabled();
-    } 
-    catch (error) {
-      Alert.alert('Hata', 'Bu cihaza bağlanabilmesi için Bluetooth açık olmalıdır!');
-      return;
-    }
+  const connectToDevice = async (device: any) => {
     try {
       closeModal();
       setIsConnecting(true);
-      const connected = await RNBluetoothClassic.connectToDevice(device.address, {
-        connectorType: "rfcomm",
-        connectionType: "binary",
-        //READ_SIZE: 1,
-        //READ_TIMEOUT: 0,
-        delimiter: "\n",
-        encoding: "utf-8",
-      });
-      setConnectedDevice(connected);
-      if (connected) {
-        setMessages([]);
-        saveLastConnectedDevice(device);
-      }
+      const manager = managerRef.current!;
+      const connected = await manager.connectToDevice(device.id);
+      await connected.discoverAllServicesAndCharacteristics();
+
+      // Subscribe to notifications on TX characteristic
+      monitorSubscriptionRef.current = manager.monitorCharacteristicForDevice(
+        connected.id,
+        NUS_SERVICE,
+        NUS_TX,
+        (error, characteristic) => {
+          if (error) {
+            console.warn('monitor error', error);
+            return;
+          }
+          if (characteristic?.value) {
+            const decoded = Buffer.from(characteristic.value, 'base64').toString('utf8').trim();
+            if (decoded) {
+              setMessages(prev => [...prev, { id: Date.now(), text: decoded, mode: 'received', time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }]);
+            }
+          }
+        }
+      );
+
+      const connectedWrapper: BluetoothDevice = {
+        id: connected.id,
+        name: connected.name || device.name,
+        address: connected.id,
+        write: async (data: string) => {
+          const base64 = Buffer.from(data, 'utf8').toString('base64');
+          try {
+            // Try write with response first
+            await manager.writeCharacteristicWithResponseForDevice(connected.id, NUS_SERVICE, NUS_RX, base64);
+          } catch (e) {
+            // Fallback to without response
+            await manager.writeCharacteristicWithoutResponseForDevice(connected.id, NUS_SERVICE, NUS_RX, base64);
+          }
+        },
+        disconnect: async () => {
+          try {
+            if (monitorSubscriptionRef.current) {
+              monitorSubscriptionRef.current.remove();
+              monitorSubscriptionRef.current = null;
+            }
+            await manager.cancelDeviceConnection(connected.id);
+          } catch (e) {
+            console.warn('disconnect error', e);
+          }
+        },
+        onDataReceived: (cb: any) => {
+          // For compatibility; already handled by monitor above which pushes to store.
+          // Also provide a subscription-like object for old code paths.
+          const sub = manager.monitorCharacteristicForDevice(connected.id, NUS_SERVICE, NUS_TX, (err, characteristic) => {
+            if (err) return;
+            if (characteristic?.value) {
+              cb({ data: Buffer.from(characteristic.value, 'base64').toString('utf8') });
+            }
+          });
+          return { remove: () => sub.remove() };
+        }
+      };
+
+      setConnectedDevice(connectedWrapper as any);
+      setMessages([]);
+      saveLastConnectedDevice(device);
       setIsConnecting(false);
-    }
-    catch (e) {
+    } catch (e) {
+      console.warn(e);
       setIsConnecting(false);
       Alert.alert("Hata", "Bağlantı kurulamadı.");
     }
@@ -210,7 +269,11 @@ export default function BluetoothConnectionScreen() {
             style: "destructive",
             onPress: async () => {
               setManuallyDisconnected(true);
-              await connectedDevice.disconnect();
+              try {
+                await connectedDevice.disconnect();
+              } catch (e) {
+                console.warn('disconnect failed', e);
+              }
               setConnectedDevice(null);
               setMessages([]);
               ToastAndroid.show("Bağlantı kesildi", ToastAndroid.SHORT);
@@ -221,10 +284,10 @@ export default function BluetoothConnectionScreen() {
     }
   };
 
-  const renderDevice = ({ item }: { item: BluetoothDevice }) => {
+  const renderDevice = ({ item }: { item: any }) => {
 
     const isConnected = connectedDevice?.address === item.address;
-    const isPaired = item.bonded;
+    const isPaired = false;
     const cardStyle = isConnected ? styles.connectedCard : isPaired ? styles.pairedCard : styles.newCard;
     const iconColor = isConnected ? "#fff" : isPaired ? "#0284C7" : "#64748B";
 

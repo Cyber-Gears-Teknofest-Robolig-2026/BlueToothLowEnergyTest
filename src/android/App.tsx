@@ -2,9 +2,6 @@ import React, { useEffect, useState } from "react";
 import { Alert } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { KeyboardProvider } from "react-native-keyboard-controller";
-import RNBluetoothClassic, {
-  BluetoothDevice,
-} from "react-native-bluetooth-classic";
 import {
   NavigationContainer,
   useNavigation,
@@ -35,35 +32,6 @@ const AppNavigator = () => {
   const manuallyDisconnected = useBluetoothStore((state) => state.manuallyDisconnected);
   const setManuallyDisconnected = useBluetoothStore((state) => state.setManuallyDisconnected);
 
-  useEffect(() => {
-    const bluetoothDisabledSubscription = RNBluetoothClassic.onBluetoothDisabled(async () => {
-      Alert.alert(
-        "Hata",
-        "Bluetooth kapalı!"
-      );
-      await connectedDevice?.disconnect();
-      setManuallyDisconnected(false);
-      setConnectedDevice(null);
-    });
-    return () => {
-      bluetoothDisabledSubscription.remove();
-    };
-  }, []);
-
-  useEffect(() => {
-    const disconnectSubscription = RNBluetoothClassic.onDeviceDisconnected(() => {
-      setConnectedDevice(null);
-      const { manuallyDisconnected } = useBluetoothStore.getState();
-      if (!manuallyDisconnected) {
-        Alert.alert(
-          "Bağlantı Koptu ⚠️",
-          "Cihazın gücü kesildi veya menzilden çıkıldı."
-        );
-      }
-      setManuallyDisconnected(false);
-    });
-    return () => disconnectSubscription.remove();
-  }, []);
 
   return (
     <NavigationContainer>

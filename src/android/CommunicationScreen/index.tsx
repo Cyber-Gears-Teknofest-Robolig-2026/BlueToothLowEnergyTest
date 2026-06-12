@@ -102,10 +102,18 @@ export default function CommunicationScreen() {
   useEffect(() => {
     if (connectedDevice) {
       readSubscriptionRef.current = connectedDevice?.onDataReceived((event) => {
-        const receivedData = Buffer.from(event.data, "base64")
-          .toString("utf-8")
-          .trim();
+        let raw = event.data;
+        let receivedData = raw;
+        try {
+          // if looks like base64 (basic check) decode, otherwise use raw
+          if (typeof raw === 'string' && /^[A-Za-z0-9+/=\s]+$/.test(raw) && raw.length % 4 === 0) {
+            receivedData = Buffer.from(raw, 'base64').toString('utf-8');
+          }
+        } catch (e) {
+          receivedData = raw;
+        }
 
+        receivedData = (receivedData || '').toString().trim();
         if (!receivedData) return;
 
         setMessages([

@@ -13,6 +13,11 @@ import { useNavigation } from '@react-navigation/native';
 import type { AppNavigationProp } from '../constants';
 import { useBluetoothStore } from '../constants';
 
+// Nordic UART Service
+const NUS_SERVICE = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
+const NUS_RX = '6e400002-b5a3-f393-e0a9-e50e24dcca9e'; // write
+const NUS_TX = '6e400003-b5a3-f393-e0a9-e50e24dcca9e'; // notify
+
 export default function BluetoothConnectionScreen() {
   const connectedDevice = useBluetoothStore((state) => state.connectedDevice);
   const setConnectedDevice = useBluetoothStore((state) => state.setConnectedDevice);
@@ -33,45 +38,90 @@ export default function BluetoothConnectionScreen() {
   const [isConnecting, setIsConnecting] = useState(false);
 
   useEffect(() => {
-    if (typeof window !== 'undefined' && !('serial' in navigator)) {
-      window.alert('Hata: Tarayıcınız Web Serial API desteklemiyor. Chrome veya Edge kullanın.');
+    if (typeof window !== 'undefined' && !('bluetooth' in navigator)) {
+      window.alert('Hata: Tarayıcınız Web Bluetooth API desteklemiyor. Chrome/Edge kullanın.');
     }
   }, []);
 
   const selectAndConnect = async () => {
-    if (!('serial' in navigator)) return;
-
-    let port: any;
-    try {
-      port = await (navigator as any).serial.requestPort();
-    } catch (error) {
-      return;
-    }
+    if (!('bluetooth' in navigator)) return;
 
     try {
+      // Request device that exposes NUS service; fall back to allow all and ask for optionalServices
+      const device = await (navigator as any).bluetooth.requestDevice({
+        filters: [ { services: [NUS_SERVICE] } ],
+        optionalServices: [NUS_SERVICE],
+      });
+
       setIsConnecting(true);
-      await port.open({ baudRate: 9600 });
 
-      // Web Serial API'de COM port adı script'e expose edilmiyor.
-      // port objesinde ne varsa logla (vendor/product ID dışında bir şey çıkmayacak):
-      console.log('port:', port);
-      console.log('port.getInfo():', port.getInfo?.());
-      console.log('port keys:', Object.keys(port));
+      const server = await device.gatt.connect();
+      const service = await server.getPrimaryService(NUS_SERVICE);
+      const txChar = await service.getCharacteristic(NUS_TX);
+      const rxChar = await service.getCharacteristic(NUS_RX);
 
-      const bluetoothDevice = {
-        readable: port.readable,
-        writable: port.writable,
-        close: async () => {
-          await port.close();
+      // Create ReadableStream from notifications
+      const readable = new ReadableStream({
+        start(controller) {
+          const onNotify = (ev: any) => {
+            const value = ev.target.value; // DataView
+            const decoder = new TextDecoder();
+            const text = decoder.decode(value.buffer).trim();
+            if (text) controller.enqueue(new TextEncoder().encode(text));
+          };
+
+          txChar.addEventListener('characteristicvaluechanged', onNotify);
+          txChar.startNotifications().catch((e: any) => console.warn(e));
+
+          (this as any)._cleanup = async () => {
+            try {
+              txChar.removeEventListener('characteristicvaluechanged', onNotify);
+              await txChar.stopNotifications();
+            } catch (e) {}
+          };
         },
+        cancel(reason) {
+          // no-op
+        }
+      });
+
+      // Create WritableStream that writes to RX characteristic
+      const writable = new WritableStream({
+        write: async (chunk) => {
+          const encoder = new TextEncoder();
+          const data = typeof chunk === 'string' ? encoder.encode(chunk) : chunk;
+          try {
+            await rxChar.writeValue(data);
+          } catch (e) {
+            // try without response method if available
+            if ((rxChar as any).writeValueWithoutResponse) {
+              await (rxChar as any).writeValueWithoutResponse(data);
+            } else {
+              console.warn('write failed', e);
+            }
+          }
+        },
+        close: async () => {},
+        abort: async () => {},
+      });
+
+      const wrapper = {
+        readable,
+        writable,
+        close: async () => {
+          try {
+            await (readable as any)._cleanup?.();
+          } catch (e) {}
+          try { await server.disconnect(); } catch (e) {}
+        }
       };
 
-      console.log('bluetoothDevice:', bluetoothDevice);
-
-      setConnectedDevice(bluetoothDevice);
-      setDeviceName('Seri Port');
+      setConnectedDevice(wrapper as any);
+      setDeviceName(device.name || 'BLE Device');
       setMessages([]);
+
     } catch (e) {
+      console.warn(e);
       window.alert('Hata: Bağlantı kurulamadı.');
     } finally {
       setIsConnecting(false);
@@ -150,7 +200,7 @@ export default function BluetoothConnectionScreen() {
               {isConnecting
                 ? 'Lütfen bekleyin...'
                 : connectedDevice
-                ? deviceName || 'Seri Cihaz'
+                ? deviceName || 'BLE Cihazı'
                 : 'Cihaz seçilmedi'}
             </Text>
           </View>
