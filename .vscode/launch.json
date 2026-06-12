@@ -1,0 +1,37 @@
+{
+  "version": "1.0.0",
+  "configurations": [
+    {
+      "name": "Expo Debug",
+      "type": "expo",
+      "request": "attach",
+      "bundlerHost": "${config:expoDemo.host}",
+      "bundlerPort": "${config:expoDemo.port}",
+      "projectRoot": "${workspaceFolder}"
+    },
+    {
+      "name": "Expo Open Debug Browser",
+      "type": "chrome",
+      "request": "launch",
+      "url": "http://${config:expoDemo.host}:${config:expoDemo.port}",
+      "webRoot": "${workspaceFolder}"
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Expo All Debug",
+      "configurations": [
+        "Expo Debug",
+        "Expo Open Debug Browser"
+      ],
+      "preLaunchTask": "expo-start"
+    },
+    {
+      "name": "Expo All Debug Without Browser",
+      "configurations": [
+        "Expo Debug"
+      ],
+      "preLaunchTask": "expo-start"
+    }
+  ]
+}
