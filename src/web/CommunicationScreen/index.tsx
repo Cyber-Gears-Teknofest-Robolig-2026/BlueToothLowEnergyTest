@@ -140,17 +140,17 @@ export default function CommunicationScreen() {
 
   const sendMessage = async () => {
     if (!inputText.trim()) return;
-    if (!connectedDevice || !connectedDevice.writable) {
-      window.alert('Hata: Cihaz bağlı değil veya yazılabilir değil.');
-      return;
-    }
 
     const sendedData = inputText.trim();
 
     try {
-      const writer = connectedDevice.writable.getWriter();
-      await writer.write(new TextEncoder().encode(sendedData + '\r\n'));
-      writer.releaseLock();
+      // Write over BLE only when connected; otherwise just keep the message in
+      // the chat so the user can still type while disconnected.
+      if (connectedDevice && connectedDevice.writable) {
+        const writer = connectedDevice.writable.getWriter();
+        await writer.write(new TextEncoder().encode(sendedData + '\r\n'));
+        writer.releaseLock();
+      }
 
       setMessages((prev) => [
         ...prev,
@@ -354,12 +354,10 @@ export default function CommunicationScreen() {
           />
           <TouchableOpacity
             style={
-              !inputText.trim() || !connectedDevice
-                ? styles.sendButtonDisabled
-                : styles.sendButton
+              !inputText.trim() ? styles.sendButtonDisabled : styles.sendButton
             }
             onPress={sendMessage}
-            disabled={!inputText.trim() || !connectedDevice}
+            disabled={!inputText.trim()}
           >
             <Icon name="send" size={26} color="#FFFFFF" />
           </TouchableOpacity>

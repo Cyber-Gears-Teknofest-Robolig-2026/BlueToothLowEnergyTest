@@ -14,6 +14,8 @@ import {
   StatusBar,
   ToastAndroid,
   Pressable,
+  Linking,
+  Platform,
 } from "react-native";
 import { useState, useRef, useEffect } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -74,6 +76,8 @@ export default function BluetoothConnectionScreen() {
 
   const scanTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const disconnectSubRef = useRef<{ remove: () => void } | null>(null);
+  // Names we seeded from storage, so we can detect a firmware rename on rescan.
+  const seededNamesRef = useRef<Map<string, string | null | undefined>>(new Map());
 
   // Resolved here (Android-only render path) so the shared manager is never
   // instantiated in the web bundle. See getBleManager() in constants.
@@ -130,16 +134,96 @@ export default function BluetoothConnectionScreen() {
     }
   };
 
-  // Mirrors Classic's requestBluetoothEnabled(): make sure the adapter is on.
-  const ensureBluetoothOn = async (): Promise<boolean> => {
+  // A renamed device keeps the same id/address, so the stored name goes stale.
+  // Refresh it in the registry and the "last connected" card.
+  const persistDeviceName = async (id: string, name: string) => {
     try {
-      const state = await manager.state();
-      if (state === State.PoweredOn) return true;
-      await manager.enable(); // Android: prompts the user to turn Bluetooth on
-      return true;
-    } catch (e) {
-      return false;
+      const known = await loadKnownDevices();
+      let changed = false;
+      const next = known.map((d) => {
+        if (d.id === id && d.name !== name) { changed = true; return { ...d, name }; }
+        return d;
+      });
+      if (changed) await AsyncStorage.setItem('knownDevices', JSON.stringify(next));
+    } catch (error) {
     }
+    setLastConnectedDevice((prev) => {
+      if (prev && prev.id === id && prev.name !== name) {
+        const updated = { ...prev, name };
+        AsyncStorage.setItem('lastConnectedDevice', JSON.stringify(updated)).catch(() => {});
+        return updated;
+      }
+      return prev;
+    });
+  };
+
+  // Ask the user before turning Bluetooth on. Resolves true if they accept.
+  const confirmEnableBluetooth = (): Promise<boolean> =>
+    new Promise((resolve) => {
+      Alert.alert(
+        "Bluetooth Kapalı",
+        "Cihaz aramak ve bağlanmak için Bluetooth'un açık olması gerekiyor. Şimdi açılsın mı?",
+        [
+          { text: "Hayır", style: "cancel", onPress: () => resolve(false) },
+          { text: "Evet", onPress: () => resolve(true) },
+        ],
+        { cancelable: true, onDismiss: () => resolve(false) }
+      );
+    });
+
+  const requestBlePermissions = async (): Promise<boolean> => {
+    const result = await PermissionsAndroid.requestMultiple([
+      PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
+      PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
+      PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+    ]);
+    return Object.values(result).every((v) => v === PermissionsAndroid.RESULTS.GRANTED);
+  };
+
+  // Resolves true once the adapter reaches PoweredOn, or false after a timeout.
+  const waitForPoweredOn = (timeoutMs: number): Promise<boolean> =>
+    new Promise((resolve) => {
+      let settled = false;
+      const finish = (val: boolean) => {
+        if (settled) return;
+        settled = true;
+        try { sub.remove(); } catch (e) {}
+        clearTimeout(timer);
+        resolve(val);
+      };
+      const sub = manager.onStateChange((s) => {
+        if (s === State.PoweredOn) finish(true);
+      }, true);
+      const timer = setTimeout(() => finish(false), timeoutMs);
+    });
+
+  // Make sure Bluetooth is on, asking the user first if it is off. Tries the
+  // direct enable (works on Android <= 12) and falls back to the system
+  // "turn on Bluetooth?" dialog on Android 13+ where enable() is a no-op.
+  const ensureBluetoothOn = async (): Promise<boolean> => {
+    const state = await manager.state().catch(() => null);
+    if (state === State.PoweredOn) return true;
+
+    const shouldEnable = await confirmEnableBluetooth();
+    if (!shouldEnable) return false; // user declined → abort quietly
+
+    const apiLevel = typeof Platform.Version === "number" ? Platform.Version : 0;
+
+    if (apiLevel < 31) {
+      // Android <= 11: BluetoothAdapter.enable() works and is silent.
+      manager.enable().catch(() => {});
+      if (await waitForPoweredOn(5000)) return true;
+    } else {
+      // Android 12+: enable() is restricted/deprecated, so ask the OS to turn
+      // Bluetooth on via the system dialog (works on all modern versions).
+      try {
+        await Linking.sendIntent("android.bluetooth.adapter.action.REQUEST_ENABLE");
+        if (await waitForPoweredOn(20000)) return true;
+      } catch (e) {}
+    }
+
+    Alert.alert("Hata", "Bluetooth açılamadı. Lütfen elle açıp tekrar deneyin.");
+    return false;
   };
 
   const panResponder = useRef(
@@ -183,8 +267,13 @@ export default function BluetoothConnectionScreen() {
 
   const openBluetoothModal = async () => {
 
+    // Permissions first so enabling Bluetooth (needs BLUETOOTH_CONNECT) works.
+    if (!(await requestBlePermissions())) {
+      Alert.alert('Permissions Required', 'Bluetooth permissions are required to scan and connect to devices.');
+      return;
+    }
+
     if (!(await ensureBluetoothOn())) {
-      Alert.alert('Hata', 'Bu ayara girilebilmesi için Bluetooth açık olmalıdır!');
       return;
     }
 
@@ -193,34 +282,23 @@ export default function BluetoothConnectionScreen() {
 
     setScanning(true);
 
-    const permissionsResult = await PermissionsAndroid.requestMultiple([
-      PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
-      PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
-      PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
-    ]);
-
-    for (const [key, value] of Object.entries(permissionsResult)) {
-      if (value !== 'granted') {
-        Alert.alert('Permissions Required', 'Bluetooth permissions are required to scan and connect to devices.');
-        setScanning(false);
-        return;
-      }
-    }
-
     try { manager.stopDeviceScan(); } catch (e) {}
 
     // Seed the list with "bonded" (previously connected + currently connected)
     // devices first, exactly like Classic shows getBondedDevices() up front.
+    seededNamesRef.current.clear();
     const bondedMap = new Map<string, ScannedDevice>();
     const known = await loadKnownDevices();
-    known.forEach((d) =>
-      bondedMap.set(d.id, { id: d.id, name: d.name, address: d.address ?? d.id, bonded: true })
-    );
+    known.forEach((d) => {
+      bondedMap.set(d.id, { id: d.id, name: d.name, address: d.address ?? d.id, bonded: true });
+      seededNamesRef.current.set(d.id, d.name);
+    });
     try {
       const systemConnected = await manager.connectedDevices([NUS_SERVICE]);
-      systemConnected.forEach((d) =>
-        bondedMap.set(d.id, { id: d.id, name: d.name, address: d.id, bonded: true })
-      );
+      systemConnected.forEach((d) => {
+        bondedMap.set(d.id, { id: d.id, name: d.name, address: d.id, bonded: true });
+        seededNamesRef.current.set(d.id, d.name);
+      });
     } catch (e) {}
     setDevices(Array.from(bondedMap.values()));
 
@@ -232,17 +310,28 @@ export default function BluetoothConnectionScreen() {
         return;
       }
       if (!device) return;
+
+      const advName = device.name;
+
+      // A known device may have been renamed in firmware (same id/address, new
+      // advertised name). Persist the new name so the stale one stops showing.
+      if (advName && seededNamesRef.current.has(device.id) && seededNamesRef.current.get(device.id) !== advName) {
+        seededNamesRef.current.set(device.id, advName);
+        persistDeviceName(device.id, advName);
+      }
+
       setDevices((prev) => {
         const idx = prev.findIndex((p) => p.id === device.id);
         if (idx !== -1) {
-          if (!prev[idx].name && device.name) {
+          // Prefer the freshly advertised name (handles renamed devices).
+          if (advName && advName !== prev[idx].name) {
             const next = [...prev];
-            next[idx] = { ...next[idx], name: device.name };
+            next[idx] = { ...next[idx], name: advName };
             return next;
           }
           return prev;
         }
-        return [...prev, { id: device.id, name: device.name, address: device.id, bonded: false }];
+        return [...prev, { id: device.id, name: advName, address: device.id, bonded: false }];
       });
     });
 
@@ -256,8 +345,12 @@ export default function BluetoothConnectionScreen() {
   };
 
   const connectToDevice = async (device: ScannedDevice) => {
+    // Permissions first so enabling Bluetooth (needs BLUETOOTH_CONNECT) works.
+    if (!(await requestBlePermissions())) {
+      Alert.alert('Permissions Required', 'Bluetooth permissions are required to connect to devices.');
+      return;
+    }
     if (!(await ensureBluetoothOn())) {
-      Alert.alert('Hata', 'Bu cihaza bağlanabilmesi için Bluetooth açık olmalıdır!');
       return;
     }
     try {
@@ -284,7 +377,8 @@ export default function BluetoothConnectionScreen() {
       // Classic BluetoothDevice (write / disconnect / onDataReceived).
       const connectedWrapper: BluetoothDevice = {
         id: connected.id,
-        name: connected.name || device.name,
+        // Prefer the name we just scanned/displayed (reflects firmware renames).
+        name: device.name || connected.name,
         address: connected.id,
         bonded: true,
         write: async (data: string) => {
@@ -319,7 +413,7 @@ export default function BluetoothConnectionScreen() {
 
       setConnectedDevice(connectedWrapper);
       setMessages([]);
-      const remembered: ScannedDevice = { id: connected.id, name: connected.name || device.name, address: connected.id };
+      const remembered: ScannedDevice = { id: connected.id, name: device.name || connected.name, address: connected.id };
       saveLastConnectedDevice(remembered);
       rememberDevice(remembered);
       setIsConnecting(false);
