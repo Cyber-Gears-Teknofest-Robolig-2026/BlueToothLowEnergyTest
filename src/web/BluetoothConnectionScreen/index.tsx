@@ -13,10 +13,10 @@ import { useNavigation } from '@react-navigation/native';
 import type { AppNavigationProp } from '../constants';
 import { useBluetoothStore } from '../constants';
 
-// Nordic UART Service
-const NUS_SERVICE = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
-const NUS_RX = '6e400002-b5a3-f393-e0a9-e50e24dcca9e'; // write
-const NUS_TX = '6e400003-b5a3-f393-e0a9-e50e24dcca9e'; // notify
+// Custom device GATT service/characteristics (must match the firmware UUIDs).
+const NUS_SERVICE = '8c17a100-2b31-4f52-9a68-7b126a090001'; // lowercase required by Web Bluetooth
+const NUS_RX = '8c17a100-2b31-4f52-9a68-7b126a090002'; // write
+const NUS_TX = '8c17a100-2b31-4f52-9a68-7b126a090003'; // notify
 
 export default function BluetoothConnectionScreen() {
   const connectedDevice = useBluetoothStore((state) => state.connectedDevice);
@@ -56,6 +56,19 @@ export default function BluetoothConnectionScreen() {
       setIsConnecting(true);
 
       const server = await device.gatt.connect();
+
+      // Notify and clean up if the device drops on its own (power loss / out of
+      // range). Mirrors the Android onDeviceDisconnected handler.
+      device.addEventListener('gattserverdisconnected', () => {
+        const wasManual = useBluetoothStore.getState().manuallyDisconnected;
+        setConnectedDevice(null);
+        setDeviceName(null);
+        if (!wasManual) {
+          window.alert('Bağlantı Koptu ⚠️: Cihazın gücü kesildi veya menzilden çıkıldı.');
+        }
+        setManuallyDisconnected(false);
+      });
+
       const service = await server.getPrimaryService(NUS_SERVICE);
       const txChar = await service.getCharacteristic(NUS_TX);
       const rxChar = await service.getCharacteristic(NUS_RX);

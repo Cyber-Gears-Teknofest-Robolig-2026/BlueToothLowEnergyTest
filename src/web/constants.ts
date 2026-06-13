@@ -28,7 +28,9 @@ type BluetoothStore = {
   deviceName: string | null;
   setDeviceName: (name: string | null) => void;
   messages: Message[];
-  setMessages: (messages: Message[]) => void;
+  // Accepts a new array or a React-style updater so the async read loop can
+  // append without capturing a stale `messages`.
+  setMessages: (messages: Message[] | ((prev: Message[]) => Message[])) => void;
   manuallyDisconnected: boolean;
   setManuallyDisconnected: (manuallyDisconnected: boolean) => void;
 };
@@ -39,7 +41,10 @@ export const useBluetoothStore = create<BluetoothStore>((set) => ({
   deviceName: null,
   setDeviceName: (name) => set({ deviceName: name }),
   messages: [],
-  setMessages: (messages: Message[]) => set({ messages }),
+  setMessages: (messages) =>
+    set((state) => ({
+      messages: typeof messages === 'function' ? messages(state.messages) : messages,
+    })),
   manuallyDisconnected: false,
   setManuallyDisconnected: (manuallyDisconnected: boolean) => set({ manuallyDisconnected }),
 }));

@@ -17,11 +17,11 @@ import {
 } from "react-native";
 import { useState, useRef, useEffect } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { BleManager, Device } from 'react-native-ble-plx';
-import { Buffer } from 'buffer';
+import { State } from "react-native-ble-plx";
+import { Buffer } from "buffer";
 import {
   useSafeAreaInsets,
-  SafeAreaView
+  SafeAreaView,
 } from "react-native-safe-area-context";
 import Icon from "@expo/vector-icons/MaterialCommunityIcons";
 import styles from './styles';
@@ -30,12 +30,19 @@ import {
   AppNavigationProp,
   useBluetoothStore,
   BluetoothDevice,
+  getBleManager,
+  NUS_SERVICE,
+  NUS_RX,
+  NUS_TX,
 } from "../constants";
 
-// Nordic UART Service (common for BLE serial-like communication)
-const NUS_SERVICE = '6e400001-b5a3-f393-e0a9-e50e24dcca9e'.toLowerCase();
-const NUS_RX = '6e400002-b5a3-f393-e0a9-e50e24dcca9e'.toLowerCase(); // write (from client to device)
-const NUS_TX = '6e400003-b5a3-f393-e0a9-e50e24dcca9e'.toLowerCase(); // notify (from device to client)
+// Lightweight item shown in the scan list (not the connected wrapper).
+interface ScannedDevice {
+  id: string;
+  name?: string | null;
+  address: string;
+  bonded?: boolean;
+}
 
 export default function BluetoothConnectionScreen() {
 
@@ -56,24 +63,29 @@ export default function BluetoothConnectionScreen() {
   const SNAP_PARTIAL = SCREEN_HEIGHT * 0.35;
   const SNAP_CLOSED = SCREEN_HEIGHT;
 
-  const [devices, setDevices] = useState<any[]>([]);
+  const [devices, setDevices] = useState<ScannedDevice[]>([]);
   const [modalVisible, setModalVisible] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
-  const [lastConnectedDevice, setLastConnectedDevice] = useState<any | null>(null);
+  const [lastConnectedDevice, setLastConnectedDevice] = useState<ScannedDevice | null>(null);
 
   const panY = useRef(new Animated.Value(SNAP_CLOSED)).current;
   const currentSnapPoint = useRef(SNAP_CLOSED);
 
-  const managerRef = useRef<BleManager | null>(null);
   const scanTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const monitorSubscriptionRef = useRef<any>(null);
+  const disconnectSubRef = useRef<{ remove: () => void } | null>(null);
+
+  // Resolved here (Android-only render path) so the shared manager is never
+  // instantiated in the web bundle. See getBleManager() in constants.
+  const manager = getBleManager();
 
   useEffect(() => {
-    managerRef.current = new BleManager();
     loadLastConnectedDevice();
     return () => {
-      try { managerRef.current?.destroy(); } catch (e) { }
+      try { manager.stopDeviceScan(); } catch (e) {}
+      if (scanTimeoutRef.current) clearTimeout(scanTimeoutRef.current);
+      disconnectSubRef.current?.remove();
+      disconnectSubRef.current = null;
     };
   }, []);
 
@@ -84,21 +96,22 @@ export default function BluetoothConnectionScreen() {
         const lastDevice = JSON.parse(lastDeviceJson);
         setLastConnectedDevice(lastDevice);
       }
-    } catch (error) { }
+    } catch (error) {
+    }
   };
 
-  const saveLastConnectedDevice = async (device: any) => {
+  const saveLastConnectedDevice = async (device: ScannedDevice) => {
     try {
       await AsyncStorage.setItem('lastConnectedDevice', JSON.stringify(device));
       setLastConnectedDevice(device);
-    } catch (error) { }
+    } catch (error) {
+    }
   };
 
-  // Registry of devices this app has connected to before. react-native-ble-plx
-  // does not expose the OS bonded-devices list, so we keep our own so that
-  // previously connected ("paired") devices still show up in the list even
-  // when they are not advertising at scan time.
-  const loadKnownDevices = async (): Promise<any[]> => {
+  // BLE has no OS bonded-devices API, so we keep our own registry of devices
+  // this app has connected to before. These play the role of Classic's
+  // getBondedDevices(): shown first and flagged `bonded`.
+  const loadKnownDevices = async (): Promise<ScannedDevice[]> => {
     try {
       const json = await AsyncStorage.getItem('knownDevices');
       return json ? JSON.parse(json) : [];
@@ -107,18 +120,26 @@ export default function BluetoothConnectionScreen() {
     }
   };
 
-  const rememberDevice = async (device: any) => {
+  const rememberDevice = async (device: ScannedDevice) => {
     try {
       const existing = await loadKnownDevices();
-      const entry = {
-        id: device.id,
-        name: device.name ?? null,
-        address: device.address ?? device.id,
-      };
-      // Most-recent first, de-duplicated by id, capped to a sane amount.
+      const entry = { id: device.id, name: device.name ?? null, address: device.address ?? device.id };
       const next = [entry, ...existing.filter((d) => d.id !== entry.id)].slice(0, 10);
       await AsyncStorage.setItem('knownDevices', JSON.stringify(next));
-    } catch (error) { }
+    } catch (error) {
+    }
+  };
+
+  // Mirrors Classic's requestBluetoothEnabled(): make sure the adapter is on.
+  const ensureBluetoothOn = async (): Promise<boolean> => {
+    try {
+      const state = await manager.state();
+      if (state === State.PoweredOn) return true;
+      await manager.enable(); // Android: prompts the user to turn Bluetooth on
+      return true;
+    } catch (e) {
+      return false;
+    }
   };
 
   const panResponder = useRef(
@@ -156,22 +177,15 @@ export default function BluetoothConnectionScreen() {
       setModalVisible(false);
       currentSnapPoint.current = SNAP_CLOSED;
     });
-    try { managerRef.current?.stopDeviceScan(); } catch (e) { }
+    try { manager.stopDeviceScan(); } catch (e) {}
     if (scanTimeoutRef.current) clearTimeout(scanTimeoutRef.current);
   };
 
   const openBluetoothModal = async () => {
-    // Request required permissions
-    const permissionsResult = await PermissionsAndroid.requestMultiple([
-      PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
-      PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
-    ]);
 
-    for (const [key, value] of Object.entries(permissionsResult)) {
-      if (value !== 'granted') {
-        Alert.alert('Permissions Required', 'Bluetooth permissions are required to scan and connect to devices.');
-        return;
-      }
+    if (!(await ensureBluetoothOn())) {
+      Alert.alert('Hata', 'Bu ayara girilebilmesi için Bluetooth açık olmalıdır!');
+      return;
     }
 
     setModalVisible(true);
@@ -179,43 +193,48 @@ export default function BluetoothConnectionScreen() {
 
     setScanning(true);
 
-    const manager = managerRef.current!;
+    const permissionsResult = await PermissionsAndroid.requestMultiple([
+      PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
+      PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
+      PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+    ]);
 
-    // Seed the list with previously connected ("paired") devices so they are
-    // reachable for reconnection even when they are not advertising right now.
+    for (const [key, value] of Object.entries(permissionsResult)) {
+      if (value !== 'granted') {
+        Alert.alert('Permissions Required', 'Bluetooth permissions are required to scan and connect to devices.');
+        setScanning(false);
+        return;
+      }
+    }
+
+    try { manager.stopDeviceScan(); } catch (e) {}
+
+    // Seed the list with "bonded" (previously connected + currently connected)
+    // devices first, exactly like Classic shows getBondedDevices() up front.
+    const bondedMap = new Map<string, ScannedDevice>();
     const known = await loadKnownDevices();
-    const initialList: any[] = known.map((d) => ({
-      id: d.id,
-      name: d.name,
-      address: d.address ?? d.id,
-      known: true,
-    }));
-
-    // Also surface devices already connected to the system (e.g. bonded and
-    // held open by the OS) that wouldn't appear in an advertisement scan.
+    known.forEach((d) =>
+      bondedMap.set(d.id, { id: d.id, name: d.name, address: d.address ?? d.id, bonded: true })
+    );
     try {
       const systemConnected = await manager.connectedDevices([NUS_SERVICE]);
-      for (const d of systemConnected) {
-        if (!initialList.find((p) => p.id === d.id)) {
-          initialList.push({ id: d.id, name: d.name, address: d.id, known: true });
-        }
-      }
-    } catch (e) { }
+      systemConnected.forEach((d) =>
+        bondedMap.set(d.id, { id: d.id, name: d.name, address: d.id, bonded: true })
+      );
+    } catch (e) {}
+    setDevices(Array.from(bondedMap.values()));
 
-    setDevices(initialList);
-
+    // Discover nearby (advertising) devices and merge them in, keeping the
+    // bonded flag for any that we already know.
     manager.startDeviceScan(null, { allowDuplicates: false }, (error, device) => {
       if (error) {
-        console.warn('Scan error', error);
         setScanning(false);
         return;
       }
       if (!device) return;
-      setDevices(prev => {
-        const idx = prev.findIndex(p => p.id === device.id);
+      setDevices((prev) => {
+        const idx = prev.findIndex((p) => p.id === device.id);
         if (idx !== -1) {
-          // Already listed (known/seeded or seen earlier): keep it, but fill
-          // in a name if the advertisement now provides one.
           if (!prev[idx].name && device.name) {
             const next = [...prev];
             next[idx] = { ...next[idx], name: device.name };
@@ -223,91 +242,89 @@ export default function BluetoothConnectionScreen() {
           }
           return prev;
         }
-        return [...prev, { id: device.id, name: device.name, address: device.id, known: false }];
+        return [...prev, { id: device.id, name: device.name, address: device.id, bonded: false }];
       });
     });
 
-    // stop scan after 8s
+    // Classic's startDiscovery() resolves once; BLE scanning streams, so we
+    // stop it after a fixed window and clear the scanning indicator.
     if (scanTimeoutRef.current) clearTimeout(scanTimeoutRef.current);
     scanTimeoutRef.current = setTimeout(() => {
-      try { manager.stopDeviceScan(); } catch (e) { }
+      try { manager.stopDeviceScan(); } catch (e) {}
       setScanning(false);
     }, 8000);
   };
 
-  const connectToDevice = async (device: any) => {
+  const connectToDevice = async (device: ScannedDevice) => {
+    if (!(await ensureBluetoothOn())) {
+      Alert.alert('Hata', 'Bu cihaza bağlanabilmesi için Bluetooth açık olmalıdır!');
+      return;
+    }
     try {
       closeModal();
       setIsConnecting(true);
-      const manager = managerRef.current!;
+
       const connected = await manager.connectToDevice(device.id);
       await connected.discoverAllServicesAndCharacteristics();
 
-      // Subscribe to notifications on TX characteristic
-      monitorSubscriptionRef.current = manager.monitorCharacteristicForDevice(
-        connected.id,
-        NUS_SERVICE,
-        NUS_TX,
-        (error, characteristic) => {
-          if (error) {
-            console.warn('monitor error', error);
-            return;
-          }
-          if (characteristic?.value) {
-            const decoded = Buffer.from(characteristic.value, 'base64').toString('utf8').trim();
-            if (decoded) {
-              setMessages(prev => [...prev, { id: Date.now(), text: decoded, mode: 'received', time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }]);
-            }
-          }
+      // Notify and clean up if the device drops on its own. Mirrors the Classic
+      // App.tsx onDeviceDisconnected handler, wired per-device for BLE. Drop any
+      // previous subscription so reconnects don't stack duplicate alerts.
+      disconnectSubRef.current?.remove();
+      disconnectSubRef.current = manager.onDeviceDisconnected(connected.id, () => {
+        setConnectedDevice(null);
+        const { manuallyDisconnected } = useBluetoothStore.getState();
+        if (!manuallyDisconnected) {
+          Alert.alert("Bağlantı Koptu ⚠️", "Cihazın gücü kesildi veya menzilden çıkıldı.");
         }
-      );
+        setManuallyDisconnected(false);
+      });
 
+      // Wrap the BLE device so the rest of the app talks to it just like a
+      // Classic BluetoothDevice (write / disconnect / onDataReceived).
       const connectedWrapper: BluetoothDevice = {
         id: connected.id,
         name: connected.name || device.name,
         address: connected.id,
+        bonded: true,
         write: async (data: string) => {
-          const base64 = Buffer.from(data, 'utf8').toString('base64');
+          const base64 = Buffer.from(data, "utf8").toString("base64");
           try {
-            // Try write with response first
             await manager.writeCharacteristicWithResponseForDevice(connected.id, NUS_SERVICE, NUS_RX, base64);
           } catch (e) {
-            // Fallback to without response
             await manager.writeCharacteristicWithoutResponseForDevice(connected.id, NUS_SERVICE, NUS_RX, base64);
           }
         },
         disconnect: async () => {
           try {
-            if (monitorSubscriptionRef.current) {
-              monitorSubscriptionRef.current.remove();
-              monitorSubscriptionRef.current = null;
-            }
             await manager.cancelDeviceConnection(connected.id);
           } catch (e) {
-            console.warn('disconnect error', e);
           }
         },
-        onDataReceived: (cb: any) => {
-          // For compatibility; already handled by monitor above which pushes to store.
-          // Also provide a subscription-like object for old code paths.
-          const sub = manager.monitorCharacteristicForDevice(connected.id, NUS_SERVICE, NUS_TX, (err, characteristic) => {
-            if (err) return;
-            if (characteristic?.value) {
-              cb({ data: Buffer.from(characteristic.value, 'base64').toString('utf8') });
+        onDataReceived: (cb) => {
+          // Single source of received data; CommunicationScreen subscribes here.
+          const sub = manager.monitorCharacteristicForDevice(
+            connected.id,
+            NUS_SERVICE,
+            NUS_TX,
+            (err, characteristic) => {
+              if (err) return;
+              // Deliver the raw base64 value; the screen decodes it (like Classic).
+              if (characteristic?.value) cb({ data: characteristic.value });
             }
-          });
+          );
           return { remove: () => sub.remove() };
-        }
+        },
       };
 
-      setConnectedDevice(connectedWrapper as any);
+      setConnectedDevice(connectedWrapper);
       setMessages([]);
-      const remembered = { id: connected.id, name: connected.name || device.name, address: connected.id };
+      const remembered: ScannedDevice = { id: connected.id, name: connected.name || device.name, address: connected.id };
       saveLastConnectedDevice(remembered);
       rememberDevice(remembered);
       setIsConnecting(false);
-    } catch (e) {
-      console.warn(e);
+    }
+    catch (e) {
       setIsConnecting(false);
       Alert.alert("Hata", "Bağlantı kurulamadı.");
     }
@@ -328,11 +345,7 @@ export default function BluetoothConnectionScreen() {
             style: "destructive",
             onPress: async () => {
               setManuallyDisconnected(true);
-              try {
-                await connectedDevice.disconnect();
-              } catch (e) {
-                console.warn('disconnect failed', e);
-              }
+              await connectedDevice.disconnect();
               setConnectedDevice(null);
               setMessages([]);
               ToastAndroid.show("Bağlantı kesildi", ToastAndroid.SHORT);
@@ -343,10 +356,10 @@ export default function BluetoothConnectionScreen() {
     }
   };
 
-  const renderDevice = ({ item }: { item: any }) => {
+  const renderDevice = ({ item }: { item: ScannedDevice }) => {
 
     const isConnected = connectedDevice?.address === item.address;
-    const isPaired = !!item.known && !isConnected;
+    const isPaired = !!item.bonded && !isConnected;
     const cardStyle = isConnected ? styles.connectedCard : isPaired ? styles.pairedCard : styles.newCard;
     const iconColor = isConnected ? "#fff" : isPaired ? "#0284C7" : "#64748B";
 
@@ -367,9 +380,9 @@ export default function BluetoothConnectionScreen() {
           <Text style={styles.deviceAddress}>{item.address}</Text>
           <View style={styles.badgeRow}>
             <View style={[styles.statusBadge, isConnected ? styles.connectedBadge : isPaired ? styles.pairedBadge : styles.newBadge]}>
-              <Text style={[styles.statusBadgeText, isConnected ? styles.connectedBadgeText : isPaired ? styles.pairedBadgeText : styles.newBadgeText]}>
-                {isConnected ? "BAĞLI" : isPaired ? "EŞLEŞMİŞ" : "YENİ CİHAZ"}
-              </Text>
+               <Text style={[styles.statusBadgeText, isConnected ? styles.connectedBadgeText : isPaired ? styles.pairedBadgeText : styles.newBadgeText]}>
+                 {isConnected ? "BAĞLI" : isPaired ? "EŞLEŞMİŞ" : "YENİ CİHAZ"}
+               </Text>
             </View>
           </View>
         </View>

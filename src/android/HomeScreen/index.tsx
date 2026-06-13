@@ -1,9 +1,9 @@
 import {
-    StatusBar, 
-    View, 
-    Text, 
-    ScrollView, 
-    TouchableOpacity 
+  StatusBar,
+  View,
+  Text,
+  ScrollView,
+  TouchableOpacity
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import Icon from "@expo/vector-icons/MaterialCommunityIcons";
@@ -45,20 +45,20 @@ const CommunicationButton = () => {
 }
 
 export default function HomeScreen() {
-  
+
   const { colors } = useTheme();
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]} edges={[
-        "top",
-        "left",
-        "right",
-        "bottom"
-      ]}>
+      "top",
+      "left",
+      "right",
+      "bottom"
+    ]}>
       <StatusBar barStyle="dark-content" backgroundColor="#F8FAFC" />
-      
+
       <View style={[styles.mainHeader, { paddingHorizontal: 25 }]}>
-        <Text style={styles.mainHeaderText}>BlueTooth Classic Test</Text>
+        <Text style={styles.mainHeaderText}>BlueTooth Low Energy Test</Text>
         <Text style={styles.subHeaderText}>Lütfen bir işlem seçin</Text>
       </View>
 
@@ -66,7 +66,7 @@ export default function HomeScreen() {
         <BluetoothConnectionButton />
         <CommunicationButton />
       </ScrollView>
-      
+
     </SafeAreaView>
   );
 };

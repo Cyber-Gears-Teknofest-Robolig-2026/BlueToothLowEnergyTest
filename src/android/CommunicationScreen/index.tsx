@@ -101,25 +101,20 @@ export default function CommunicationScreen() {
 
   useEffect(() => {
     if (connectedDevice) {
-      readSubscriptionRef.current = connectedDevice?.onDataReceived((event) => {
-        let raw = event.data;
-        let receivedData = raw;
-        try {
-          // if looks like base64 (basic check) decode, otherwise use raw
-          if (typeof raw === 'string' && /^[A-Za-z0-9+/=\s]+$/.test(raw) && raw.length % 4 === 0) {
-            receivedData = Buffer.from(raw, 'base64').toString('utf-8');
-          }
-        } catch (e) {
-          receivedData = raw;
-        }
+      // Subscribe once per connection. The functional updater appends without
+      // capturing a stale `messages`, so we don't need it in the deps (which
+      // would otherwise re-subscribe on every message and deliver duplicates).
+      readSubscriptionRef.current = connectedDevice.onDataReceived((event) => {
+        const receivedData = Buffer.from(event.data, "base64")
+          .toString("utf-8")
+          .trim();
 
-        receivedData = (receivedData || '').toString().trim();
         if (!receivedData) return;
 
-        setMessages([
-          ...messages,
+        setMessages((prev) => [
+          ...prev,
           {
-            id: currentMessageId.current,
+            id: currentMessageId.current++,
             text: receivedData,
             mode: "received",
             time: new Date().toLocaleTimeString([], {
@@ -128,10 +123,6 @@ export default function CommunicationScreen() {
             }),
           },
         ]);
-
-        console.log("Message ID:", currentMessageId.current);
-
-        currentMessageId.current++;
       });
     }
 
@@ -141,7 +132,7 @@ export default function CommunicationScreen() {
         readSubscriptionRef.current = null;
       }
     };
-  }, [connectedDevice, messages]);
+  }, [connectedDevice]);
 
   const sendMessage = async () => {
     if (!inputText.trim()) return;
@@ -153,10 +144,10 @@ export default function CommunicationScreen() {
         await connectedDevice.write(sendedData + "\r\n");
       }
 
-      setMessages([
-        ...messages,
+      setMessages((prev) => [
+        ...prev,
         {
-          id: currentMessageId.current,
+          id: currentMessageId.current++,
           text: sendedData,
           mode: "sent",
           time: new Date().toLocaleTimeString([], {
@@ -165,10 +156,6 @@ export default function CommunicationScreen() {
           }),
         },
       ]);
-
-      console.log("Message ID:", currentMessageId.current);
-
-      currentMessageId.current++;
 
       setInputText("");
       scrollToBottom(true, 150);

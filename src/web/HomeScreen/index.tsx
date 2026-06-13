@@ -63,7 +63,7 @@ export default function HomeScreen() {
       <StatusBar barStyle="dark-content" backgroundColor="#F8FAFC" />
 
       <View style={[styles.mainHeader, { paddingHorizontal: 25 }]}>
-        <Text style={styles.mainHeaderText}>BlueTooth Classic Test</Text>
+        <Text style={styles.mainHeaderText}>BlueTooth Low Energy Test</Text>
         <Text style={styles.subHeaderText}>Lütfen bir işlem seçin</Text>
       </View>
 

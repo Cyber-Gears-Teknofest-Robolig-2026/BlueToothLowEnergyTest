@@ -48,7 +48,6 @@ export default function CommunicationScreen() {
 
   const currentMessageId = useRef(0);
   const scrollTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const messagesRef = useRef<Message[]>([]);
 
   const scrollToBottom = useCallback((animated = true, delay = 100) => {
     if (scrollTimeoutRef.current) {
@@ -83,7 +82,6 @@ export default function CommunicationScreen() {
   }, [scrollToBottom]);
 
   useEffect(() => {
-    messagesRef.current = messages;
     if (messages.length > 0) {
       scrollToBottom(true, 100);
     }
@@ -106,10 +104,10 @@ export default function CommunicationScreen() {
           if (value) {
             const text = new TextDecoder().decode(value).trim();
             if (text) {
-              setMessages([
-                ...messagesRef.current,
+              setMessages((prev) => [
+                ...prev,
                 {
-                  id: currentMessageId.current,
+                  id: currentMessageId.current++,
                   text: text,
                   mode: 'received',
                   time: new Date().toLocaleTimeString([], {
@@ -118,7 +116,6 @@ export default function CommunicationScreen() {
                   }),
                 },
               ]);
-              currentMessageId.current++;
             }
           }
         }
@@ -155,10 +152,10 @@ export default function CommunicationScreen() {
       await writer.write(new TextEncoder().encode(sendedData + '\r\n'));
       writer.releaseLock();
 
-      setMessages([
-        ...messages,
+      setMessages((prev) => [
+        ...prev,
         {
-          id: currentMessageId.current,
+          id: currentMessageId.current++,
           text: sendedData,
           mode: 'sent',
           time: new Date().toLocaleTimeString([], {
@@ -168,7 +165,6 @@ export default function CommunicationScreen() {
         },
       ]);
 
-      currentMessageId.current++;
       setInputText('');
       scrollToBottom(true, 150);
       requestAnimationFrame(() => {
