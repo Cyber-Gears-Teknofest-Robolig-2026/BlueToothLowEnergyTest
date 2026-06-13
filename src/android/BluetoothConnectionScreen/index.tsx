@@ -19,14 +19,14 @@ import { useState, useRef, useEffect } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { BleManager, Device } from 'react-native-ble-plx';
 import { Buffer } from 'buffer';
-import { 
-  useSafeAreaInsets, 
-  SafeAreaView 
+import {
+  useSafeAreaInsets,
+  SafeAreaView
 } from "react-native-safe-area-context";
 import Icon from "@expo/vector-icons/MaterialCommunityIcons";
 import styles from './styles';
 import { useNavigation } from "@react-navigation/native";
-import { 
+import {
   AppNavigationProp,
   useBluetoothStore,
   BluetoothDevice,
@@ -53,7 +53,7 @@ export default function BluetoothConnectionScreen() {
   const insets = useSafeAreaInsets();
 
   const SNAP_FULL = 0;
-  const SNAP_PARTIAL = SCREEN_HEIGHT * 0.35; 
+  const SNAP_PARTIAL = SCREEN_HEIGHT * 0.35;
   const SNAP_CLOSED = SCREEN_HEIGHT;
 
   const [devices, setDevices] = useState<any[]>([]);
@@ -73,7 +73,7 @@ export default function BluetoothConnectionScreen() {
     managerRef.current = new BleManager();
     loadLastConnectedDevice();
     return () => {
-      try { managerRef.current?.destroy(); } catch (e) {}
+      try { managerRef.current?.destroy(); } catch (e) { }
     };
   }, []);
 
@@ -84,14 +84,41 @@ export default function BluetoothConnectionScreen() {
         const lastDevice = JSON.parse(lastDeviceJson);
         setLastConnectedDevice(lastDevice);
       }
-    } catch (error) {}
+    } catch (error) { }
   };
 
   const saveLastConnectedDevice = async (device: any) => {
     try {
       await AsyncStorage.setItem('lastConnectedDevice', JSON.stringify(device));
       setLastConnectedDevice(device);
-    } catch (error) {}
+    } catch (error) { }
+  };
+
+  // Registry of devices this app has connected to before. react-native-ble-plx
+  // does not expose the OS bonded-devices list, so we keep our own so that
+  // previously connected ("paired") devices still show up in the list even
+  // when they are not advertising at scan time.
+  const loadKnownDevices = async (): Promise<any[]> => {
+    try {
+      const json = await AsyncStorage.getItem('knownDevices');
+      return json ? JSON.parse(json) : [];
+    } catch (error) {
+      return [];
+    }
+  };
+
+  const rememberDevice = async (device: any) => {
+    try {
+      const existing = await loadKnownDevices();
+      const entry = {
+        id: device.id,
+        name: device.name ?? null,
+        address: device.address ?? device.id,
+      };
+      // Most-recent first, de-duplicated by id, capped to a sane amount.
+      const next = [entry, ...existing.filter((d) => d.id !== entry.id)].slice(0, 10);
+      await AsyncStorage.setItem('knownDevices', JSON.stringify(next));
+    } catch (error) { }
   };
 
   const panResponder = useRef(
@@ -129,7 +156,7 @@ export default function BluetoothConnectionScreen() {
       setModalVisible(false);
       currentSnapPoint.current = SNAP_CLOSED;
     });
-    try { managerRef.current?.stopDeviceScan(); } catch (e) {}
+    try { managerRef.current?.stopDeviceScan(); } catch (e) { }
     if (scanTimeoutRef.current) clearTimeout(scanTimeoutRef.current);
   };
 
@@ -138,7 +165,6 @@ export default function BluetoothConnectionScreen() {
     const permissionsResult = await PermissionsAndroid.requestMultiple([
       PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
       PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
-      PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
     ]);
 
     for (const [key, value] of Object.entries(permissionsResult)) {
@@ -152,9 +178,31 @@ export default function BluetoothConnectionScreen() {
     animateToPoint(SNAP_FULL);
 
     setScanning(true);
-    setDevices([]);
 
     const manager = managerRef.current!;
+
+    // Seed the list with previously connected ("paired") devices so they are
+    // reachable for reconnection even when they are not advertising right now.
+    const known = await loadKnownDevices();
+    const initialList: any[] = known.map((d) => ({
+      id: d.id,
+      name: d.name,
+      address: d.address ?? d.id,
+      known: true,
+    }));
+
+    // Also surface devices already connected to the system (e.g. bonded and
+    // held open by the OS) that wouldn't appear in an advertisement scan.
+    try {
+      const systemConnected = await manager.connectedDevices([NUS_SERVICE]);
+      for (const d of systemConnected) {
+        if (!initialList.find((p) => p.id === d.id)) {
+          initialList.push({ id: d.id, name: d.name, address: d.id, known: true });
+        }
+      }
+    } catch (e) { }
+
+    setDevices(initialList);
 
     manager.startDeviceScan(null, { allowDuplicates: false }, (error, device) => {
       if (error) {
@@ -164,16 +212,25 @@ export default function BluetoothConnectionScreen() {
       }
       if (!device) return;
       setDevices(prev => {
-        const found = prev.find(p => p.id === device.id);
-        if (found) return prev;
-        return [...prev, { id: device.id, name: device.name, address: device.id }];
+        const idx = prev.findIndex(p => p.id === device.id);
+        if (idx !== -1) {
+          // Already listed (known/seeded or seen earlier): keep it, but fill
+          // in a name if the advertisement now provides one.
+          if (!prev[idx].name && device.name) {
+            const next = [...prev];
+            next[idx] = { ...next[idx], name: device.name };
+            return next;
+          }
+          return prev;
+        }
+        return [...prev, { id: device.id, name: device.name, address: device.id, known: false }];
       });
     });
 
     // stop scan after 8s
     if (scanTimeoutRef.current) clearTimeout(scanTimeoutRef.current);
     scanTimeoutRef.current = setTimeout(() => {
-      try { manager.stopDeviceScan(); } catch (e) {}
+      try { manager.stopDeviceScan(); } catch (e) { }
       setScanning(false);
     }, 8000);
   };
@@ -245,7 +302,9 @@ export default function BluetoothConnectionScreen() {
 
       setConnectedDevice(connectedWrapper as any);
       setMessages([]);
-      saveLastConnectedDevice(device);
+      const remembered = { id: connected.id, name: connected.name || device.name, address: connected.id };
+      saveLastConnectedDevice(remembered);
+      rememberDevice(remembered);
       setIsConnecting(false);
     } catch (e) {
       console.warn(e);
@@ -287,7 +346,7 @@ export default function BluetoothConnectionScreen() {
   const renderDevice = ({ item }: { item: any }) => {
 
     const isConnected = connectedDevice?.address === item.address;
-    const isPaired = false;
+    const isPaired = !!item.known && !isConnected;
     const cardStyle = isConnected ? styles.connectedCard : isPaired ? styles.pairedCard : styles.newCard;
     const iconColor = isConnected ? "#fff" : isPaired ? "#0284C7" : "#64748B";
 
@@ -308,9 +367,9 @@ export default function BluetoothConnectionScreen() {
           <Text style={styles.deviceAddress}>{item.address}</Text>
           <View style={styles.badgeRow}>
             <View style={[styles.statusBadge, isConnected ? styles.connectedBadge : isPaired ? styles.pairedBadge : styles.newBadge]}>
-               <Text style={[styles.statusBadgeText, isConnected ? styles.connectedBadgeText : isPaired ? styles.pairedBadgeText : styles.newBadgeText]}>
-                 {isConnected ? "BAĞLI" : isPaired ? "EŞLEŞMİŞ" : "YENİ CİHAZ"}
-               </Text>
+              <Text style={[styles.statusBadgeText, isConnected ? styles.connectedBadgeText : isPaired ? styles.pairedBadgeText : styles.newBadgeText]}>
+                {isConnected ? "BAĞLI" : isPaired ? "EŞLEŞMİŞ" : "YENİ CİHAZ"}
+              </Text>
             </View>
           </View>
         </View>
@@ -322,7 +381,7 @@ export default function BluetoothConnectionScreen() {
   return (
     <SafeAreaView style={styles.container} edges={["top", "bottom"]}>
       <StatusBar barStyle="dark-content" backgroundColor="#F8FAFC" />
-      
+
       <View style={styles.headerWithBack}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
           <Icon name="arrow-left" size={26} color="#1E293B" />
@@ -337,7 +396,7 @@ export default function BluetoothConnectionScreen() {
       </View>
 
       <ScrollView contentContainerStyle={{ flexGrow: 1 }}>
-        
+
         <View style={styles.infoCard}>
           <View style={styles.infoRow}>
             <Icon name="bluetooth" size={32} color={isConnecting ? "#F59E0B" : connectedDevice ? "#10B981" : "#EF4444"} />

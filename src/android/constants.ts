@@ -26,11 +26,15 @@ interface Message {
   time: string;
 }
 
+// Accepts either a new array or a React-style updater function so callers can
+// safely append from async callbacks without capturing a stale `messages`.
+type MessagesUpdate = Message[] | ((prev: Message[]) => Message[]);
+
 type BluetoothStore = {
   connectedDevice: BluetoothDevice | null;
   setConnectedDevice: (device: BluetoothDevice | null) => void;
   messages: Message[];
-  setMessages: (messages: Message[]) => void;
+  setMessages: (messages: MessagesUpdate) => void;
   manuallyDisconnected: boolean;
   setManuallyDisconnected: (manuallyDisconnected: boolean) => void;
 };
@@ -39,7 +43,10 @@ export const useBluetoothStore = create<BluetoothStore>((set) => ({
   connectedDevice: null,
   setConnectedDevice: (device) => set({ connectedDevice: device }),
   messages: [],
-  setMessages: (messages: Message[]) => set({ messages }),
+  setMessages: (messages) =>
+    set((state) => ({
+      messages: typeof messages === "function" ? messages(state.messages) : messages,
+    })),
   manuallyDisconnected: false,
   setManuallyDisconnected: (manuallyDisconnected: boolean) => set({ manuallyDisconnected }),
 }));
