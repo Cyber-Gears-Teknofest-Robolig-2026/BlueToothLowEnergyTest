@@ -11,12 +11,12 @@ import Icon from '@expo/vector-icons/MaterialCommunityIcons';
 import styles from './styles';
 import { useNavigation } from '@react-navigation/native';
 import type { AppNavigationProp } from '../constants';
-import { useBluetoothStore } from '../constants';
-
-// Custom device GATT service/characteristics (must match the firmware UUIDs).
-const NUS_SERVICE = '8c17a100-2b31-4f52-9a68-7b126a090001'; // lowercase required by Web Bluetooth
-const NUS_RX = '8c17a100-2b31-4f52-9a68-7b126a090002'; // write
-const NUS_TX = '8c17a100-2b31-4f52-9a68-7b126a090003'; // notify
+import {
+  useBluetoothStore,
+  NUS_SERVICE,
+  NUS_RX,
+  NUS_TX,
+} from '../constants';
 
 export default function BluetoothConnectionScreen() {
   const connectedDevice = useBluetoothStore((state) => state.connectedDevice);
@@ -49,7 +49,7 @@ export default function BluetoothConnectionScreen() {
     try {
       // Request device that exposes NUS service; fall back to allow all and ask for optionalServices
       const device = await (navigator as any).bluetooth.requestDevice({
-        filters: [ { services: [NUS_SERVICE] } ],
+        filters: [{ services: [NUS_SERVICE] }],
         optionalServices: [NUS_SERVICE],
       });
 
@@ -90,7 +90,7 @@ export default function BluetoothConnectionScreen() {
             try {
               txChar.removeEventListener('characteristicvaluechanged', onNotify);
               await txChar.stopNotifications();
-            } catch (e) {}
+            } catch (e) { }
           };
         },
         cancel(reason) {
@@ -114,8 +114,8 @@ export default function BluetoothConnectionScreen() {
             }
           }
         },
-        close: async () => {},
-        abort: async () => {},
+        close: async () => { },
+        abort: async () => { },
       });
 
       const wrapper = {
@@ -124,8 +124,8 @@ export default function BluetoothConnectionScreen() {
         close: async () => {
           try {
             await (readable as any)._cleanup?.();
-          } catch (e) {}
-          try { await server.disconnect(); } catch (e) {}
+          } catch (e) { }
+          try { await server.disconnect(); } catch (e) { }
         }
       };
 
@@ -213,8 +213,8 @@ export default function BluetoothConnectionScreen() {
               {isConnecting
                 ? 'Lütfen bekleyin...'
                 : connectedDevice
-                ? deviceName || 'BLE Cihazı'
-                : 'Cihaz seçilmedi'}
+                  ? deviceName || 'BLE Cihazı'
+                  : 'Cihaz seçilmedi'}
             </Text>
           </View>
         </View>

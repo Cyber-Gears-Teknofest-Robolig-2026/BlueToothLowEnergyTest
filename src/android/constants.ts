@@ -2,13 +2,6 @@ import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { BleManager } from "react-native-ble-plx";
 import { create } from "zustand";
 
-// Single shared BLE manager for the whole app (App.tsx + screens use this one
-// instance, mirroring how the Classic version shares RNBluetoothClassic).
-//
-// Created lazily: the shared entry (src/App.tsx) statically imports the Android
-// app, so this module is also evaluated in the web bundle. `new BleManager()`
-// throws in a browser (no native module), so we only instantiate it on first
-// use, which on web never happens.
 let managerInstance: BleManager | null = null;
 export const getBleManager = (): BleManager => {
   if (!managerInstance) {

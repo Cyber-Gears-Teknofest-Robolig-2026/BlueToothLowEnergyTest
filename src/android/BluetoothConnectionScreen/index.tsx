@@ -15,7 +15,6 @@ import {
   ToastAndroid,
   Pressable,
   Linking,
-  Platform,
 } from "react-native";
 import { useState, useRef, useEffect } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -86,7 +85,7 @@ export default function BluetoothConnectionScreen() {
   useEffect(() => {
     loadLastConnectedDevice();
     return () => {
-      try { manager.stopDeviceScan(); } catch (e) {}
+      try { manager.stopDeviceScan(); } catch (e) { }
       if (scanTimeoutRef.current) clearTimeout(scanTimeoutRef.current);
       disconnectSubRef.current?.remove();
       disconnectSubRef.current = null;
@@ -150,7 +149,7 @@ export default function BluetoothConnectionScreen() {
     setLastConnectedDevice((prev) => {
       if (prev && prev.id === id && prev.name !== name) {
         const updated = { ...prev, name };
-        AsyncStorage.setItem('lastConnectedDevice', JSON.stringify(updated)).catch(() => {});
+        AsyncStorage.setItem('lastConnectedDevice', JSON.stringify(updated)).catch(() => { });
         return updated;
       }
       return prev;
@@ -175,7 +174,6 @@ export default function BluetoothConnectionScreen() {
     const result = await PermissionsAndroid.requestMultiple([
       PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
       PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
-      PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
     ]);
     return Object.values(result).every((v) => v === PermissionsAndroid.RESULTS.GRANTED);
   };
@@ -187,7 +185,7 @@ export default function BluetoothConnectionScreen() {
       const finish = (val: boolean) => {
         if (settled) return;
         settled = true;
-        try { sub.remove(); } catch (e) {}
+        try { sub.remove(); } catch (e) { }
         clearTimeout(timer);
         resolve(val);
       };
@@ -207,20 +205,16 @@ export default function BluetoothConnectionScreen() {
     const shouldEnable = await confirmEnableBluetooth();
     if (!shouldEnable) return false; // user declined → abort quietly
 
-    const apiLevel = typeof Platform.Version === "number" ? Platform.Version : 0;
+    // First try the direct enable (silent, works on Android <= 12).
+    manager.enable().catch(() => { });
+    if (await waitForPoweredOn(3000)) return true;
 
-    if (apiLevel < 31) {
-      // Android <= 11: BluetoothAdapter.enable() works and is silent.
-      manager.enable().catch(() => {});
-      if (await waitForPoweredOn(5000)) return true;
-    } else {
-      // Android 12+: enable() is restricted/deprecated, so ask the OS to turn
-      // Bluetooth on via the system dialog (works on all modern versions).
-      try {
-        await Linking.sendIntent("android.bluetooth.adapter.action.REQUEST_ENABLE");
-        if (await waitForPoweredOn(20000)) return true;
-      } catch (e) {}
-    }
+    // If it didn't turn on (Android 13+ where enable() is a no-op), ask the OS
+    // to enable Bluetooth via the system dialog (works on all modern versions).
+    try {
+      await Linking.sendIntent("android.bluetooth.adapter.action.REQUEST_ENABLE");
+      if (await waitForPoweredOn(20000)) return true;
+    } catch (e) { }
 
     Alert.alert("Hata", "Bluetooth açılamadı. Lütfen elle açıp tekrar deneyin.");
     return false;
@@ -261,7 +255,7 @@ export default function BluetoothConnectionScreen() {
       setModalVisible(false);
       currentSnapPoint.current = SNAP_CLOSED;
     });
-    try { manager.stopDeviceScan(); } catch (e) {}
+    try { manager.stopDeviceScan(); } catch (e) { }
     if (scanTimeoutRef.current) clearTimeout(scanTimeoutRef.current);
   };
 
@@ -282,7 +276,7 @@ export default function BluetoothConnectionScreen() {
 
     setScanning(true);
 
-    try { manager.stopDeviceScan(); } catch (e) {}
+    try { manager.stopDeviceScan(); } catch (e) { }
 
     // Seed the list with "bonded" (previously connected + currently connected)
     // devices first, exactly like Classic shows getBondedDevices() up front.
@@ -299,7 +293,7 @@ export default function BluetoothConnectionScreen() {
         bondedMap.set(d.id, { id: d.id, name: d.name, address: d.id, bonded: true });
         seededNamesRef.current.set(d.id, d.name);
       });
-    } catch (e) {}
+    } catch (e) { }
     setDevices(Array.from(bondedMap.values()));
 
     // Discover nearby (advertising) devices and merge them in, keeping the
@@ -339,7 +333,7 @@ export default function BluetoothConnectionScreen() {
     // stop it after a fixed window and clear the scanning indicator.
     if (scanTimeoutRef.current) clearTimeout(scanTimeoutRef.current);
     scanTimeoutRef.current = setTimeout(() => {
-      try { manager.stopDeviceScan(); } catch (e) {}
+      try { manager.stopDeviceScan(); } catch (e) { }
       setScanning(false);
     }, 8000);
   };
@@ -474,9 +468,9 @@ export default function BluetoothConnectionScreen() {
           <Text style={styles.deviceAddress}>{item.address}</Text>
           <View style={styles.badgeRow}>
             <View style={[styles.statusBadge, isConnected ? styles.connectedBadge : isPaired ? styles.pairedBadge : styles.newBadge]}>
-               <Text style={[styles.statusBadgeText, isConnected ? styles.connectedBadgeText : isPaired ? styles.pairedBadgeText : styles.newBadgeText]}>
-                 {isConnected ? "BAĞLI" : isPaired ? "EŞLEŞMİŞ" : "YENİ CİHAZ"}
-               </Text>
+              <Text style={[styles.statusBadgeText, isConnected ? styles.connectedBadgeText : isPaired ? styles.pairedBadgeText : styles.newBadgeText]}>
+                {isConnected ? "BAĞLI" : isPaired ? "EŞLEŞMİŞ" : "YENİ CİHAZ"}
+              </Text>
             </View>
           </View>
         </View>

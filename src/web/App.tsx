@@ -13,9 +13,39 @@ import {
 import HomeScreen from './HomeScreen';
 import BluetoothConnectionScreen from './BluetoothConnectionScreen';
 import CommunicationScreen from './CommunicationScreen';
-import { type RootStackParamList, useBluetoothStore } from './constants';
+import {
+  type RootStackParamList,
+  useBluetoothStore,
+  useSettingsStore,
+} from './constants';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
+
+function ensureTurkishNoTranslate() {
+  if (typeof document === "undefined") return;
+
+  const html = document.documentElement;
+  html.lang = "tr";
+  html.setAttribute("translate", "no");
+  html.classList.add("notranslate");
+
+  if (document.body) {
+    document.body.setAttribute("translate", "no");
+    document.body.classList.add("notranslate");
+  }
+
+  let meta = document.querySelector('meta[name="google"]') as HTMLMetaElement | null;
+  if (!meta) {
+    meta = document.createElement("meta");
+    meta.name = "google";
+    (document.head || document.documentElement).appendChild(meta);
+  }
+  meta.content = "notranslate";
+}
+
+// Run as early as possible (before first paint) to keep the browser from
+// offering to translate the page. Safe on native: it no-ops without `document`.
+ensureTurkishNoTranslate();
 
 const AppNavigator = () => {
   const connectedDevice = useBluetoothStore((state) => state.connectedDevice);
@@ -38,6 +68,16 @@ const AppNavigator = () => {
 
     return () => clearInterval(checkConnection);
   }, [connectedDevice, manuallyDisconnected]);
+
+  const settingsHydrated = useSettingsStore((state) => state._hasHydrated);
+
+  useEffect(() => {
+    ensureTurkishNoTranslate();
+  }, []);
+
+  if (!settingsHydrated) {
+    return null;
+  }
 
   return (
     <NavigationContainer
