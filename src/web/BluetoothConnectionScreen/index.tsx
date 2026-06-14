@@ -11,12 +11,8 @@ import Icon from '@expo/vector-icons/MaterialCommunityIcons';
 import styles from './styles';
 import { useNavigation } from '@react-navigation/native';
 import type { AppNavigationProp } from '../constants';
-import {
-  useBluetoothStore,
-  NUS_SERVICE,
-  NUS_RX,
-  NUS_TX,
-} from '../constants';
+import { useBluetoothStore } from '../constants';
+import * as BT from '../BTControlLib';
 
 export default function BluetoothConnectionScreen() {
   const connectedDevice = useBluetoothStore((state) => state.connectedDevice);
@@ -44,95 +40,23 @@ export default function BluetoothConnectionScreen() {
   }, []);
 
   const selectAndConnect = async () => {
-    if (!('bluetooth' in navigator)) return;
-
     try {
-      // Request device that exposes NUS service; fall back to allow all and ask for optionalServices
-      const device = await (navigator as any).bluetooth.requestDevice({
-        filters: [{ services: [NUS_SERVICE] }],
-        optionalServices: [NUS_SERVICE],
-      });
+      if (!BT.isSupported()) {
+        window.alert('Hata: Tarayıcınız Web Bluetooth API desteklemiyor. Chrome/Edge kullanın.');
+        return;
+      }
 
       setIsConnecting(true);
+      const device = await BT.connect();
 
-      const server = await device.gatt.connect();
+      if (!device) {
+        // User cancelled or no device found that matches the filter
+        return;
+      }
 
-      // Notify and clean up if the device drops on its own (power loss / out of
-      // range). Mirrors the Android onDeviceDisconnected handler.
-      device.addEventListener('gattserverdisconnected', () => {
-        const wasManual = useBluetoothStore.getState().manuallyDisconnected;
-        setConnectedDevice(null);
-        setDeviceName(null);
-        if (!wasManual) {
-          window.alert('Bağlantı Koptu ⚠️: Cihazın gücü kesildi veya menzilden çıkıldı.');
-        }
-        setManuallyDisconnected(false);
-      });
-
-      const service = await server.getPrimaryService(NUS_SERVICE);
-      const txChar = await service.getCharacteristic(NUS_TX);
-      const rxChar = await service.getCharacteristic(NUS_RX);
-
-      // Create ReadableStream from notifications
-      const readable = new ReadableStream({
-        start(controller) {
-          const onNotify = (ev: any) => {
-            const value = ev.target.value; // DataView
-            const decoder = new TextDecoder();
-            const text = decoder.decode(value.buffer).trim();
-            if (text) controller.enqueue(new TextEncoder().encode(text));
-          };
-
-          txChar.addEventListener('characteristicvaluechanged', onNotify);
-          txChar.startNotifications().catch((e: any) => console.warn(e));
-
-          (this as any)._cleanup = async () => {
-            try {
-              txChar.removeEventListener('characteristicvaluechanged', onNotify);
-              await txChar.stopNotifications();
-            } catch (e) { }
-          };
-        },
-        cancel(reason) {
-          // no-op
-        }
-      });
-
-      // Create WritableStream that writes to RX characteristic
-      const writable = new WritableStream({
-        write: async (chunk) => {
-          const encoder = new TextEncoder();
-          const data = typeof chunk === 'string' ? encoder.encode(chunk) : chunk;
-          try {
-            await rxChar.writeValue(data);
-          } catch (e) {
-            // try without response method if available
-            if ((rxChar as any).writeValueWithoutResponse) {
-              await (rxChar as any).writeValueWithoutResponse(data);
-            } else {
-              console.warn('write failed', e);
-            }
-          }
-        },
-        close: async () => { },
-        abort: async () => { },
-      });
-
-      const wrapper = {
-        readable,
-        writable,
-        close: async () => {
-          try {
-            await (readable as any)._cleanup?.();
-          } catch (e) { }
-          try { await server.disconnect(); } catch (e) { }
-        }
-      };
-
-      setConnectedDevice(wrapper as any);
-      setDeviceName(device.name || 'BLE Device');
+      setConnectedDevice(device as any);
+      setDeviceName((device as any).name || 'BLE Device');
       setMessages([]);
-
     } catch (e) {
       console.warn(e);
       window.alert('Hata: Bağlantı kurulamadı.');
@@ -146,7 +70,11 @@ export default function BluetoothConnectionScreen() {
       const confirmed = window.confirm("Cihaz bağlantısı kesilsin mi?");
       if (confirmed) {
         setManuallyDisconnected(true);
-        await connectedDevice.close();
+        try {
+          await (connectedDevice as any).disconnect();
+        } catch (e) {
+          console.warn('disconnect error', e);
+        }
         setConnectedDevice(null);
         setDeviceName(null);
         setMessages([]);

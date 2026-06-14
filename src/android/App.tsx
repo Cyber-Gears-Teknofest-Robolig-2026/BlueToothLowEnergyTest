@@ -22,8 +22,8 @@ import {
   RootStackParamList,
   AppNavigationProp,
   useBluetoothStore,
-  getBleManager,
 } from "./constants";
+import * as BT from './BTControlLib';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
@@ -37,16 +37,17 @@ const AppNavigator = () => {
   // Global Bluetooth adapter watcher: when the user turns Bluetooth off, warn
   // and tear the connection down (BLE equivalent of onBluetoothDisabled).
   useEffect(() => {
-    const subscription = getBleManager().onStateChange(async (state) => {
-      if (state === State.PoweredOff) {
-        Alert.alert("Hata", "Bluetooth kapalı!");
+    const subscription = BT.onAdapterPoweredOff(() => {
+      Alert.alert("Hata", "Bluetooth kapalı!");
+      (async () => {
         try {
           await connectedDevice?.disconnect();
         } catch (e) {}
         setManuallyDisconnected(false);
         setConnectedDevice(null);
-      }
-    }, true);
+      })();
+    });
+
     return () => subscription.remove();
   }, [connectedDevice]);
 

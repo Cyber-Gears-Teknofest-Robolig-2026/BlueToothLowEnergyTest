@@ -16,9 +16,11 @@ export type RootStackParamList = {
 export type AppNavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
 interface BluetoothDevice {
-  readable: ReadableStream<Uint8Array> | null;
-  writable: WritableStream<Uint8Array> | null;
-  close: () => Promise<void>;
+  id?: string;
+  name?: string | null;
+  write: (data: string) => Promise<void>;
+  onDataReceived: (cb: (event: { data: string }) => void) => { remove: () => void };
+  disconnect: () => Promise<void>;
 }
 
 interface Message {

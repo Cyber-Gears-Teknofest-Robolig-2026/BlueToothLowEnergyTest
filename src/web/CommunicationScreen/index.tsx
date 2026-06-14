@@ -87,54 +87,33 @@ export default function CommunicationScreen() {
     }
   }, [messages, scrollToBottom]);
 
-  // Bluetooth okuma
+  // Bluetooth okuma — BTControlLib arayüzü kullanılarak
   useEffect(() => {
-    const readFromBluetooth = async () => {
-      if (!connectedDevice || !connectedDevice.readable) return;
+    let subscription: { remove: () => void } | null = null;
 
-      try {
-        const reader = connectedDevice.readable.getReader();
-        readerRef.current = reader;
-        readLoopRef.current = true;
+    if (connectedDevice && (connectedDevice as any).onDataReceived) {
+      subscription = (connectedDevice as any).onDataReceived((event: { data: string }) => {
+        const text = String(event.data).trim();
+        if (!text) return;
 
-        while (readLoopRef.current) {
-          const { value, done } = await reader.read();
-          if (done) break;
-
-          if (value) {
-            const text = new TextDecoder().decode(value).trim();
-            if (text) {
-              setMessages((prev) => [
-                ...prev,
-                {
-                  id: currentMessageId.current++,
-                  text: text,
-                  mode: 'received',
-                  time: new Date().toLocaleTimeString([], {
-                    hour: '2-digit',
-                    minute: '2-digit',
-                  }),
-                },
-              ]);
-            }
-          }
-        }
-      } catch (error) {
-      } finally {
-        readerRef.current = null;
-      }
-    };
-
-    if (connectedDevice && connectedDevice.readable) {
-      readFromBluetooth();
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: currentMessageId.current++,
+            text,
+            mode: 'received',
+            time: new Date().toLocaleTimeString([], {
+              hour: '2-digit',
+              minute: '2-digit',
+            }),
+          },
+        ]);
+      });
     }
 
     return () => {
-      readLoopRef.current = false;
-      if (readerRef.current) {
-        readerRef.current.cancel();
-        readerRef.current = null;
-      }
+      subscription?.remove();
+      subscription = null;
     };
   }, [connectedDevice]);
 
@@ -144,12 +123,8 @@ export default function CommunicationScreen() {
     const sendedData = inputText.trim();
 
     try {
-      // Write over BLE only when connected; otherwise just keep the message in
-      // the chat so the user can still type while disconnected.
-      if (connectedDevice && connectedDevice.writable) {
-        const writer = connectedDevice.writable.getWriter();
-        await writer.write(new TextEncoder().encode(sendedData + '\r\n'));
-        writer.releaseLock();
+      if (connectedDevice && (connectedDevice as any).write) {
+        await (connectedDevice as any).write(sendedData + '\r\n');
       }
 
       setMessages((prev) => [
@@ -170,8 +145,7 @@ export default function CommunicationScreen() {
       requestAnimationFrame(() => {
         inputRef.current?.focus();
       });
-    } 
-    catch (e) {
+    } catch (e) {
       window.alert('Hata: Veri gönderilemedi.');
     }
   };
@@ -193,12 +167,9 @@ export default function CommunicationScreen() {
       if (window.confirm('Bağlantı kesilecek. Emin misiniz?')) {
         try {
           setManuallyDisconnected(true);
-          readLoopRef.current = false;
-          if (readerRef.current) {
-            await readerRef.current.cancel();
-            readerRef.current = null;
+          if ((connectedDevice as any)?.disconnect) {
+            await (connectedDevice as any).disconnect();
           }
-          await connectedDevice.close();
           setConnectedDevice(null);
           setDeviceName(null);
           setMessages([]);
