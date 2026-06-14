@@ -33,7 +33,11 @@ const RX_UUID = "8C17A100-2B31-4F52-9A68-7B126A090002";
 const TX_UUID = "8C17A100-2B31-4F52-9A68-7B126A090003";
 
 // Tek bir BleManager örneği kullanılmalıdır. Use the shared instance from constants to avoid early construction.
-const bleManager = getBleManager();
+let bleManager: BleManager | null = null;
+const getManager = (): BleManager => {
+  if (!bleManager) bleManager = getBleManager();
+  return bleManager;
+};
 
 // Aktif taramanın açık olup olmadığını tutar.
 let scanning = false;
@@ -83,7 +87,7 @@ const getCurrentState = (): Promise<State> =>
   new Promise((resolve) => {
     let subscription: BlePlxSubscription | null = null;
 
-    subscription = bleManager.onStateChange((state) => {
+    subscription = getManager().onStateChange((state) => {
       subscription?.remove();
       resolve(state);
     }, true);
@@ -99,7 +103,7 @@ export const ensureEnabled = async (): Promise<boolean> => {
 
     // Android'de Bluetooth açma penceresini gösterir.
     if (Platform.OS === "android") {
-      await bleManager.enable();
+      await getManager().enable();
 
       const newState = await getCurrentState();
       return newState === State.PoweredOn;
@@ -121,13 +125,13 @@ export const startScan = (
   onError: (error: unknown) => void
 ): void => {
   if (scanning) {
-    bleManager.stopDeviceScan();
+      getManager().stopDeviceScan();
   }
 
   scanning = true;
 
   // Yalnızca kendi servis UUID'mizi yayınlayan cihazları tarar.
-  bleManager.startDeviceScan(
+  getManager().startDeviceScan(
     [SERVICE_UUID],
     {
       allowDuplicates: false,
@@ -135,7 +139,7 @@ export const startScan = (
     (error, device) => {
       if (error) {
         scanning = false;
-        bleManager.stopDeviceScan();
+        getManager().stopDeviceScan();
         onError(error);
         return;
       }
@@ -161,7 +165,7 @@ export const startScan = (
 export const stopScan = (): void => {
   try {
     scanning = false;
-    bleManager.stopDeviceScan();
+    getManager().stopDeviceScan();
   } catch (error) {
     console.warn("BLE taraması durdurulamadı:", error);
   }
@@ -172,7 +176,7 @@ export const stopScan = (): void => {
 // ============================================================================
 export const listConnectedDevices = async (): Promise<ScannedDevice[]> => {
   try {
-    const devices = await bleManager.connectedDevices([SERVICE_UUID]);
+    const devices = await getManager().connectedDevices([SERVICE_UUID]);
     return devices.map((device) => ({
       id: device.id,
       name: device.name ?? device.localName ?? `BLE Cihazı (${device.id})`,
@@ -194,7 +198,7 @@ export const connect = async (
   // Bağlantı kurulurken taramayı durdur.
   stopScan();
 
-  let device = await bleManager.connectToDevice(deviceId, {
+  let device = await getManager().connectToDevice(deviceId, {
     autoConnect: false,
   });
 
@@ -222,7 +226,7 @@ export const onAdapterPoweredOff = (
 ): Subscription => {
   let previouslyPoweredOn = false;
 
-  const subscription = bleManager.onStateChange((state) => {
+  const subscription = getManager().onStateChange((state) => {
     if (state === State.PoweredOn) {
       previouslyPoweredOn = true;
       return;
@@ -251,7 +255,7 @@ export const onDeviceDisconnected = (
   deviceId: string,
   listener: () => void
 ): Subscription => {
-  const subscription = bleManager.onDeviceDisconnected(
+  const subscription = getManager().onDeviceDisconnected(
     deviceId,
     () => {
       listener();
