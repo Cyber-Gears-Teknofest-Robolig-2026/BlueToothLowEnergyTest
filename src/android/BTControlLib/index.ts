@@ -14,6 +14,7 @@ import {
   State,
   Subscription as BlePlxSubscription,
 } from "react-native-ble-plx";
+import { getBleManager } from '../constants';
 
 import { Buffer } from "buffer";
 
@@ -31,8 +32,8 @@ const SERVICE_UUID = "8C17A100-2B31-4F52-9A68-7B126A090001";
 const RX_UUID = "8C17A100-2B31-4F52-9A68-7B126A090002";
 const TX_UUID = "8C17A100-2B31-4F52-9A68-7B126A090003";
 
-// Tek bir BleManager örneği kullanılmalıdır.
-const bleManager = new BleManager();
+// Tek bir BleManager örneği kullanılmalıdır. Use the shared instance from constants to avoid early construction.
+const bleManager = getBleManager();
 
 // Aktif taramanın açık olup olmadığını tutar.
 let scanning = false;
