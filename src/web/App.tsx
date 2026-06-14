@@ -21,63 +21,7 @@ import {
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
-function ensureTurkishNoTranslate() {
-  if (typeof document === "undefined") return;
-
-  const html = document.documentElement;
-  html.lang = "tr";
-  html.setAttribute("translate", "no");
-  html.classList.add("notranslate");
-
-  if (document.body) {
-    document.body.setAttribute("translate", "no");
-    document.body.classList.add("notranslate");
-  }
-
-  let meta = document.querySelector('meta[name="google"]') as HTMLMetaElement | null;
-  if (!meta) {
-    meta = document.createElement("meta");
-    meta.name = "google";
-    (document.head || document.documentElement).appendChild(meta);
-  }
-  meta.content = "notranslate";
-}
-
-// Run as early as possible (before first paint) to keep the browser from
-// offering to translate the page. Safe on native: it no-ops without `document`.
-ensureTurkishNoTranslate();
-
 const AppNavigator = () => {
-  const connectedDevice = useBluetoothStore((state) => state.connectedDevice);
-  const setConnectedDevice = useBluetoothStore((state) => state.setConnectedDevice);
-  const manuallyDisconnected = useBluetoothStore(
-    (state) => state.manuallyDisconnected
-  );
-  const setManuallyDisconnected = useBluetoothStore(
-    (state) => state.setManuallyDisconnected
-  );
-
-  useEffect(() => {
-    // Bağlantı kopma kontrolü (Web Bluetooth API için basit implementasyon)
-    const checkConnection = setInterval(() => {
-      if (connectedDevice && !manuallyDisconnected) {
-        // Web Bluetooth API'de bağlantı durumu kontrolü
-        // Gerçek implementasyon daha karmaşık olabilir
-      }
-    }, 5000);
-
-    return () => clearInterval(checkConnection);
-  }, [connectedDevice, manuallyDisconnected]);
-
-  const settingsHydrated = useSettingsStore((state) => state._hasHydrated);
-
-  useEffect(() => {
-    ensureTurkishNoTranslate();
-  }, []);
-
-  if (!settingsHydrated) {
-    return null;
-  }
 
   return (
     <NavigationContainer
