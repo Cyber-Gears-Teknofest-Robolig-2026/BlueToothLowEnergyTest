@@ -6,7 +6,7 @@ import {
   TouchableOpacity,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import MaterialCommunityIcons from "react-native-vector-icons/MaterialCommunityIcons";
+import { MaterialCommunityIcons } from "@expo/vector-icons";
 import styles from "./styles";
 import { useNavigation } from "@react-navigation/native";
 import { AppNavigationProp } from "../constants";
@@ -16,6 +16,8 @@ import {
   useEffectiveTheme,
   type ThemeMode,
 } from "../theme";
+
+type MaterialCommunityIconName = keyof typeof MaterialCommunityIcons.glyphMap;
 
 const BluetoothConnectionButton = () => {
   const navigation = useNavigation<AppNavigationProp>();
@@ -72,7 +74,13 @@ const ThemeToggle = () => {
   const mode = useThemeStore((s) => s.mode);
   const setMode = useThemeStore((s) => s.setMode);
 
-  const Btn = ({ value, icon }: { value: ThemeMode; icon: string }) => {
+  const Btn = ({
+    value,
+    icon,
+  }: {
+    value: ThemeMode;
+    icon: MaterialCommunityIconName;
+  }) => {
     const active = mode === value;
     return (
       <TouchableOpacity

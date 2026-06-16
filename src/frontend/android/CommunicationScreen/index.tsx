@@ -14,7 +14,7 @@ import {
   useSafeAreaInsets,
   SafeAreaView,
 } from "react-native-safe-area-context";
-import Icon from "react-native-vector-icons/MaterialCommunityIcons";
+import { MaterialCommunityIcons as Icon } from "@expo/vector-icons";
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import styles from "./styles";
 import { useNavigation } from "@react-navigation/native";
@@ -57,7 +57,7 @@ export default function CommunicationScreen() {
   const readSubscriptionRef = useRef<any>(null);
 
   const currentMessageId = useRef(0);
-  const scrollTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const scrollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const scrollToBottom = useCallback((animated = true, delay = 100) => {
     if (scrollTimeoutRef.current) {

@@ -6,7 +6,7 @@ import {
   TouchableOpacity,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import Icon from "react-native-vector-icons/MaterialCommunityIcons";
+import { MaterialCommunityIcons as Icon } from "@expo/vector-icons";
 import styles from "./styles";
 import { useNavigation } from "@react-navigation/native";
 import { AppNavigationProp } from "../constants";
@@ -16,6 +16,8 @@ import {
   useEffectiveTheme,
   type ThemeMode,
 } from "../theme";
+
+type MaterialCommunityIconName = keyof typeof Icon.glyphMap;
 
 const BluetoothConnectionButton = () => {
   const navigation = useNavigation<AppNavigationProp>();
@@ -72,7 +74,13 @@ const ThemeToggle = () => {
   const mode = useThemeStore((s) => s.mode);
   const setMode = useThemeStore((s) => s.setMode);
 
-  const Btn = ({ value, icon }: { value: ThemeMode; icon: string }) => {
+  const Btn = ({
+    value,
+    icon,
+  }: {
+    value: ThemeMode;
+    icon: MaterialCommunityIconName;
+  }) => {
     const active = mode === value;
     return (
       <TouchableOpacity
@@ -121,13 +129,14 @@ export default function HomeScreen() {
           styles.mainHeader,
           {
             paddingHorizontal: 25,
-            flexDirection: "row",
-            alignItems: "center",
-            justifyContent: "space-between",
+            alignItems: "stretch",
           },
         ]}
       >
-        <View style={{ flex: 1 }}>
+        <View style={{ alignItems: "flex-end", marginBottom: 8 }}>
+          <ThemeToggle />
+        </View>
+        <View>
           <Text style={[styles.mainHeaderText, { color: colors.textPrimary }]}>
             BlueTooth Low Energy Test
           </Text>
@@ -135,7 +144,6 @@ export default function HomeScreen() {
             Lütfen bir işlem seçin
           </Text>
         </View>
-        <ThemeToggle />
       </View>
 
       <ScrollView contentContainerStyle={styles.scrollContent}>
