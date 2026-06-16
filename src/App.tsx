@@ -1,47 +1,59 @@
+import React from "react";
+import { Platform } from "react-native";
+import WebApp from "@/src/frontend/web/App";
+import AndroidApp from "@/src/frontend/android/App";
+import { BluetoothProvider as WebBluetoothProvider } from "@/src/frontend/web/BluetoothContext";
+import { BluetoothProvider as AndroidBluetoothProvider } from "@/src/frontend/android/BluetoothContext";
+import type { BluetoothApi } from "@/src/backend";
 
-import React, { useState, useEffect } from 'react';
-import { StatusBar } from 'expo-status-bar';
-import { 
-  Platform,
-  View,
-  ActivityIndicator
-} from 'react-native';
-import * as Font from 'expo-font';
-import WebApp from '@/src/web/App';
-import AndroidApp from '@/src/android/App';
+/**
+ * ENTEGRASYON KATMANI (frontend'in DIŞI)
+ * --------------------------------------------------------------------------
+ * Backend burada, frontend'in dışında, defansif şekilde yüklenir ve enjekte
+ * edilir. Backend yüklenemezse (native modül yok / Expo Go / dosya silinmiş)
+ * `null` döner; BluetoothProvider güvenli no-op'a düşer ve ARAYÜZ YİNE AÇILIR.
+ */
+function loadBackend(): BluetoothApi | null {
+  try {
+    switch (Platform.OS) {
+      case "web":
+        return require("./backend/web").default as BluetoothApi;
+      case "android":
+        return require("./backend/android").default as BluetoothApi;
+      // add `case "ios":` here when an iOS backend is available
+      default:
+        return null;
+    }
+  } catch {
+    return null;
+  }
+}
+
+const backend = loadBackend();
 
 export default function App() {
-  const [fontsLoaded, setFontsLoaded] = useState(false);
-
-  useEffect(() => {
-    let mounted = true;
-    (async () => {
-      try {
-        await Font.loadAsync({
-          MaterialCommunityIcons: require('react-native-vector-icons/Fonts/MaterialCommunityIcons.ttf'),
-        });
-      } catch (e) {
-        console.warn('Font load failed', e);
-      }
-      if (mounted) setFontsLoaded(true);
-    })();
-    return () => { mounted = false; };
-  }, []);
-
-  if (!fontsLoaded) {
-    return (
-      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-        <ActivityIndicator />
-      </View>
-    );
-  }
+  let PlatformApp: React.ComponentType<any>;
+  let PlatformBluetoothProvider: React.ComponentType<any>;
 
   switch (Platform.OS) {
-    case 'web':
-      return <WebApp />;
-    case 'android':
-      return <AndroidApp />;
+    case "web":
+      PlatformApp = WebApp;
+      PlatformBluetoothProvider = WebBluetoothProvider;
+      break;
+    case "android":
+      PlatformApp = AndroidApp;
+      PlatformBluetoothProvider = AndroidBluetoothProvider;
+      break;
+    // add `case "ios":` here when iOS frontend/provider exist
     default:
-      return <View />;
+      // fallback to Android for now; change as platforms are added
+      PlatformApp = AndroidApp;
+      PlatformBluetoothProvider = AndroidBluetoothProvider;
   }
+
+  return (
+    <PlatformBluetoothProvider backend={backend as any}>
+      <PlatformApp />
+    </PlatformBluetoothProvider>
+  );
 }

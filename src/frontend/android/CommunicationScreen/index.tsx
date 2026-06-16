@@ -14,18 +14,15 @@ import {
   useSafeAreaInsets,
   SafeAreaView,
 } from "react-native-safe-area-context";
-import { Buffer } from "buffer";
-import Icon from "@expo/vector-icons/MaterialCommunityIcons";
-import {
-  KeyboardAvoidingView,
-  KeyboardStickyView,
-} from "react-native-keyboard-controller";
+import Icon from "react-native-vector-icons/MaterialCommunityIcons";
+import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import styles from "./styles";
 import { useNavigation } from "@react-navigation/native";
 import {
   AppNavigationProp,
   useBluetoothStore,
 } from "../constants";
+import { useThemeColors, useEffectiveTheme } from "../theme";
 
 interface Message {
   id: number;
@@ -35,6 +32,8 @@ interface Message {
 }
 
 export default function CommunicationScreen() {
+  const colors = useThemeColors();
+  const effective = useEffectiveTheme();
 
   const navigation = useNavigation<AppNavigationProp>();
   const connectedDevice = useBluetoothStore((state) => state.connectedDevice);
@@ -101,20 +100,16 @@ export default function CommunicationScreen() {
 
   useEffect(() => {
     if (connectedDevice) {
-      // Subscribe once per connection. The functional updater appends without
-      // capturing a stale `messages`, so we don't need it in the deps (which
-      // would otherwise re-subscribe on every message and deliver duplicates).
-      readSubscriptionRef.current = connectedDevice.onDataReceived((event) => {
-        const receivedData = Buffer.from(event.data, "base64")
-          .toString("utf-8")
-          .trim();
+      readSubscriptionRef.current = connectedDevice?.onDataReceived((event) => {
+        // Backend çözülmüş (decoded) metin yollar; burada ek kod çözme gerekmez.
+        const receivedData = (event.data || "").toString().trim();
 
         if (!receivedData) return;
 
-        setMessages((prev) => [
-          ...prev,
+        setMessages([
+          ...messages,
           {
-            id: currentMessageId.current++,
+            id: currentMessageId.current,
             text: receivedData,
             mode: "received",
             time: new Date().toLocaleTimeString([], {
@@ -123,6 +118,10 @@ export default function CommunicationScreen() {
             }),
           },
         ]);
+
+        console.log("Message ID:", currentMessageId.current);
+
+        currentMessageId.current++;
       });
     }
 
@@ -132,7 +131,7 @@ export default function CommunicationScreen() {
         readSubscriptionRef.current = null;
       }
     };
-  }, [connectedDevice]);
+  }, [connectedDevice, messages]);
 
   const sendMessage = async () => {
     if (!inputText.trim()) return;
@@ -143,25 +142,27 @@ export default function CommunicationScreen() {
       if (connectedDevice) {
         await connectedDevice.write(sendedData + "\r\n");
       }
-
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: currentMessageId.current++,
-          text: sendedData,
-          mode: "sent",
-          time: new Date().toLocaleTimeString([], {
-            hour: "2-digit",
-            minute: "2-digit",
-          }),
-        },
-      ]);
-
-      setInputText("");
-      scrollToBottom(true, 150);
     } catch (e) {
-      Alert.alert("Hata", "Veri gönderilemedi. Cihaz bağlı mı?");
+      // Cihaza yazma başarısızsa mesajı yine de yerelde göster.
     }
+
+    setMessages([
+      ...messages,
+      {
+        id: currentMessageId.current,
+        text: sendedData,
+        mode: "sent",
+        time: new Date().toLocaleTimeString([], {
+          hour: "2-digit",
+          minute: "2-digit",
+        }),
+      },
+    ]);
+
+    currentMessageId.current++;
+
+    setInputText("");
+    scrollToBottom(true, 150);
   };
 
   const clearMessages = () => {
@@ -226,24 +227,25 @@ export default function CommunicationScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={["top", "left", "right", "bottom"]}>
-      <View style={styles.header}>
+    <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]} edges={["top", "left", "right", "bottom"]}>
+      <View style={[styles.header, { backgroundColor: colors.surface, borderBottomColor: colors.border }]}>
         <View style={styles.headerTopRow}>
           <TouchableOpacity
             onPress={() => navigation.goBack()}
             style={styles.backButton}
           >
-            <Icon name="arrow-left" size={24} color="#000000" />
+            <Icon name="arrow-left" size={24} color={colors.textPrimary} />
           </TouchableOpacity>
 
           <View style={styles.headerInfo}>
-            <Text style={styles.headerTitle}>
+            <Text style={[styles.headerTitle, { color: colors.textPrimary }]}>
               {connectedDevice?.name || "Bağlı Değil"}
             </Text>
             <Text
-              style={
-                connectedDevice ? styles.headerStatusConnected : styles.headerStatusNotConnected
-              }
+              style={[
+                connectedDevice ? styles.headerStatusConnected : styles.headerStatusNotConnected,
+                { color: connectedDevice ? colors.success : colors.danger },
+              ]}
             >
               {connectedDevice ? "Çevrimiçi" : "Çevrimdışı"}
             </Text>
@@ -256,34 +258,34 @@ export default function CommunicationScreen() {
               index: 0,
               routes: [{ name: 'Home' }],
             })}
-            style={styles.headerIconButton}
+            style={[styles.headerIconButton, { backgroundColor: colors.background }]}
           >
-            <Icon name="home" size={25} color="#000000" />
+            <Icon name="home" size={25} color={colors.textPrimary} />
           </TouchableOpacity>
           <TouchableOpacity
             onPress={() => navigation.navigate('BluetoothConnection')}
-            style={styles.headerIconButtonCog}
+            style={[styles.headerIconButtonCog, { backgroundColor: colors.surface }]}
           >
-            <Icon name="cog" size={25} color="#000000" />
+            <Icon name="cog" size={25} color={colors.textPrimary} />
           </TouchableOpacity>
           {connectedDevice ? (
             <TouchableOpacity
               onPress={disconnectDevice}
-              style={styles.headerIconButtonBluetoothOff}
+              style={[styles.headerIconButtonBluetoothOff, { backgroundColor: colors.surface }]}
             >
-              <Icon name="bluetooth-off" size={25} color="#FF0000" />
+              <Icon name="bluetooth-off" size={25} color={colors.danger} />
             </TouchableOpacity>
           ) : (
             <TouchableOpacity
               onPress={() => navigation.navigate('BluetoothConnection')}
-              style={styles.headerIconButtonBluetoothConnect}
+              style={[styles.headerIconButtonBluetoothConnect, { backgroundColor: colors.surface }]}
             >
-              <Icon name="bluetooth-connect" size={25} color="#10B981" />
+              <Icon name="bluetooth-connect" size={25} color={colors.success} />
             </TouchableOpacity>
           )}
           <TouchableOpacity
             onPress={clearMessages}
-            style={styles.headerIconButtonTrash}
+            style={[styles.headerIconButtonTrash, { backgroundColor: colors.danger }]}
           >
             <Icon name="trash-can" size={25} color="#FFFFFF" />
           </TouchableOpacity>
@@ -295,7 +297,7 @@ export default function CommunicationScreen() {
         behavior="padding"
         keyboardVerticalOffset={0}
       >
-        <View style={styles.messagesContainer}>
+        <View style={[styles.messagesContainer, { backgroundColor: colors.background }]}>
           <FlatList
             ref={flatListRef}
             data={messages}
@@ -317,14 +319,12 @@ export default function CommunicationScreen() {
                 <View
                   style={[
                     styles.messageBubble,
-                    item.mode === "sent"
-                      ? styles.messageBubbleSent
-                      : styles.messageBubbleReceived,
+                    { backgroundColor: item.mode === "sent" ? colors.sentBubble : colors.receivedBubble },
                   ]}
                 >
-                  <Text style={styles.messageText} selectable={true}>{item.text}</Text>
+                  <Text style={[styles.messageText, { color: item.mode === "sent" ? colors.sentText : colors.receivedText }]} selectable={true}>{item.text}</Text>
                   <View style={styles.messageTimeContainer}>
-                    <Text style={styles.messageTime}>{item.time}</Text>
+                    <Text style={[styles.messageTime, { color: effective === "dark" ? "#94A3B8" : "#667781" }]}>{item.time}</Text>
                   </View>
                 </View>
               </View>
@@ -335,14 +335,14 @@ export default function CommunicationScreen() {
           />
         </View>
 
-        <View style={styles.inputContainer}>
-          <View style={styles.inputWrapper}>
+        <View style={[styles.inputContainer, { backgroundColor: colors.surface, borderTopColor: colors.border }]}>
+          <View style={[styles.inputWrapper, { backgroundColor: colors.inputBackground }]}>
 
             <TextInput
               ref={inputRef}
-              style={styles.textInput}
+              style={[styles.textInput, { color: colors.textPrimary }]}
               placeholder="Mesaj yazın..."
-              placeholderTextColor="#54656F"
+              placeholderTextColor={colors.textMuted}
               value={inputText}
               onChangeText={setInputText}
               onFocus={() => {
