@@ -33,10 +33,7 @@ const styles = StyleSheet.create({
     margin: 20,
     padding: 25,
     borderRadius: 28,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.06,
-    shadowRadius: 8,
+    boxShadow: '0px 2px 8px rgba(0, 0, 0, 0.06)',
     elevation: 4,
   },
   infoRow: {

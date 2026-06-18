@@ -59,11 +59,26 @@ export const webBackend: BluetoothApi = {
     const rxChar = await service.getCharacteristic(RX_UUID);
     const txChar = await service.getCharacteristic(TX_UUID);
 
-    // Yazma helper (text -> bytes)
+    // Web Bluetooth aynı anda YALNIZCA tek bir GATT işlemine izin verir; aksi
+    // halde "GATT operation already in progress" hatası alınır. Bu yüzden tüm
+    // GATT işlemlerini (write / startNotifications / stopNotifications) tek bir
+    // promise zinciri üzerinden seri olarak çalıştırıyoruz. Bir işlem reddedilse
+    // bile zincir kırılmaz; sıradaki işlem yine de çalışır.
+    let gattChain: Promise<unknown> = Promise.resolve();
+    const enqueueGatt = <T>(op: () => Promise<T>): Promise<T> => {
+      const run = gattChain.then(op, op);
+      gattChain = run.then(
+        () => undefined,
+        () => undefined
+      );
+      return run;
+    };
+
+    // Yazma helper (text -> bytes) — GATT kuyruğu üzerinden seri çalışır.
     const write = async (data: string) => {
       const encoder = new TextEncoder();
       const bytes = encoder.encode(data);
-      await rxChar.writeValue(bytes);
+      await enqueueGatt(() => rxChar.writeValue(bytes));
     };
 
     const disconnect = async () => {
@@ -85,12 +100,12 @@ export const webBackend: BluetoothApi = {
         }
       };
       txChar.addEventListener("characteristicvaluechanged", handler);
-      txChar.startNotifications().catch(() => {});
+      enqueueGatt(() => txChar.startNotifications()).catch(() => {});
       return {
         remove: () => {
           try {
             txChar.removeEventListener("characteristicvaluechanged", handler);
-            txChar.stopNotifications().catch(() => {});
+            enqueueGatt(() => txChar.stopNotifications()).catch(() => {});
           } catch {}
         },
       };
