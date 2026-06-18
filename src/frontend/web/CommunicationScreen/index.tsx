@@ -44,9 +44,32 @@ export default function CommunicationScreen() {
   const insets = { top: 0, bottom: 0, left: 0, right: 0 };
   const readSubscriptionRef = useRef<Subscription | null>(null);
 
-  const currentMessageId = useRef(0);
   const scrollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const messagesRef = useRef<Message[]>([]);
+
+  // Mesaj id'lerini her zaman global store'daki son mesaja göre üretiriz.
+  // Böylece ekran navigasyonla yeniden mount olduğunda (component-local bir
+  // sayaç 0'a dönerken store'daki mesajlar id 0,1,2... ile durduğu için)
+  // tekrar eden key (.$0) hatası oluşmaz. getState() senkron olduğundan
+  // arka arkaya gelen mesajlarda da id'ler benzersiz kalır.
+  const appendMessage = useCallback(
+    (text: string, mode: "sent" | "received") => {
+      const current = useBluetoothStore.getState().messages;
+      const id = current.length > 0 ? current[current.length - 1].id + 1 : 0;
+      setMessages([
+        ...current,
+        {
+          id,
+          text,
+          mode,
+          time: new Date().toLocaleTimeString([], {
+            hour: "2-digit",
+            minute: "2-digit",
+          }),
+        },
+      ]);
+    },
+    [setMessages]
+  );
 
   const scrollToBottom = useCallback((animated = true, delay = 100) => {
     if (scrollTimeoutRef.current) {
@@ -79,7 +102,6 @@ export default function CommunicationScreen() {
   }, [scrollToBottom]);
 
   useEffect(() => {
-    messagesRef.current = messages;
     if (messages.length > 0) {
       scrollToBottom(true, 100);
     }
@@ -91,19 +113,7 @@ export default function CommunicationScreen() {
       readSubscriptionRef.current = connectedDevice.onDataReceived((event) => {
         const text = (event.data || "").toString().trim();
         if (!text) return;
-        setMessages([
-          ...messagesRef.current,
-          {
-            id: currentMessageId.current,
-            text,
-            mode: "received",
-            time: new Date().toLocaleTimeString([], {
-              hour: "2-digit",
-              minute: "2-digit",
-            }),
-          },
-        ]);
-        currentMessageId.current++;
+        appendMessage(text, "received");
       });
     }
 
@@ -113,7 +123,7 @@ export default function CommunicationScreen() {
         readSubscriptionRef.current = null;
       }
     };
-  }, [connectedDevice]);
+  }, [connectedDevice, appendMessage]);
 
   const sendMessage = async () => {
     if (!inputText.trim()) return;
@@ -128,20 +138,8 @@ export default function CommunicationScreen() {
       // Cihaza yazma başarısızsa mesajı yine de yerelde göster.
     }
 
-    setMessages([
-      ...messages,
-      {
-        id: currentMessageId.current,
-        text: sendedData,
-        mode: "sent",
-        time: new Date().toLocaleTimeString([], {
-          hour: "2-digit",
-          minute: "2-digit",
-        }),
-      },
-    ]);
+    appendMessage(sendedData, "sent");
 
-    currentMessageId.current++;
     setInputText("");
     scrollToBottom(true, 150);
     requestAnimationFrame(() => {
@@ -157,7 +155,6 @@ export default function CommunicationScreen() {
 
     if (window.confirm("Ekrandaki bütün mesajlar silinecek. Emin misiniz?")) {
       setMessages([]);
-      currentMessageId.current = 0;
     }
   };
 
