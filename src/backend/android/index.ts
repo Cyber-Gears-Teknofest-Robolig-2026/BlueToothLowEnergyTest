@@ -27,6 +27,22 @@ const manager = new BleManager();
 let scanTimeout: ReturnType<typeof setTimeout> | null = null;
 let scanActive = false;
 
+// "Cihaz bağlantısı koptu" için global dinleyiciler. Sözleşmedeki
+// onDeviceDisconnected uygulama açılışında BİR kez (bağlantıdan ÖNCE) kaydedilir;
+// BLE'de kopma ise cihaza özeldir. Bu yüzden her bağlantıda cihazın kopma
+// olayını (manager.onDeviceDisconnected) bu global dinleyicilere köprüleriz.
+const deviceDisconnectListeners = new Set<() => void>();
+let activeDisconnectSub: { remove: () => void } | null = null;
+const emitDeviceDisconnected = () => {
+  deviceDisconnectListeners.forEach((listener) => {
+    try {
+      listener();
+    } catch {
+      /* bir dinleyicinin hatası diğerlerini engellemesin */
+    }
+  });
+};
+
 const waitForPoweredOn = (timeout = 5000) =>
   new Promise<boolean>((resolve) => {
     const sub = manager.onStateChange((state) => {
@@ -138,6 +154,15 @@ export const androidBackend: BluetoothApi = {
     const dev = await manager.connectToDevice(device.id, { timeout: 10000 });
     await dev.discoverAllServicesAndCharacteristics();
 
+    // Bağlantı koptuğunda (güç kesilmesi / menzil dışı / BT kapanması) global
+    // "bağlantı koptu" dinleyicilerini tetikle. Önceki cihazın aboneliğini
+    // temizleyip bu cihaz için yenisini kur.
+    activeDisconnectSub?.remove();
+    const disconnectSub = manager.onDeviceDisconnected(dev.id, () => {
+      emitDeviceDisconnected();
+    });
+    activeDisconnectSub = { remove: () => disconnectSub.remove() };
+
     // Monitor TX characteristic (notify)
     const subscription = manager.monitorCharacteristicForDevice(
       dev.id,
@@ -202,9 +227,15 @@ export const androidBackend: BluetoothApi = {
     return { remove: () => { } };
   },
 
-  onDeviceDisconnected(_listener: () => void): Subscription {
-    // Gerekirse manager.onDeviceDisconnected kullanılabilir; şimdilik NOOP.
-    return { remove: () => { } };
+  onDeviceDisconnected(listener: () => void): Subscription {
+    // Global dinleyiciye ekle; gerçek kopma, cihaz bağlandığında kurulan
+    // manager.onDeviceDisconnected aboneliği (bkz. connect) ile tetiklenir.
+    deviceDisconnectListeners.add(listener);
+    return {
+      remove: () => {
+        deviceDisconnectListeners.delete(listener);
+      },
+    };
   },
 };
 

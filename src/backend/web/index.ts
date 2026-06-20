@@ -22,6 +22,26 @@ const NOOP_SUBSCRIPTION: Subscription = { remove: () => {} };
 const hasWebBluetooth = () =>
   typeof navigator !== "undefined" && !!(navigator as any).bluetooth;
 
+// "Cihaz bağlantısı koptu" için global dinleyiciler. Web Bluetooth kopmayı
+// device üzerindeki `gattserverdisconnected` olayıyla bildirir; her bağlantıda
+// o olayı bu dinleyicilere köprüleriz (sözleşmedeki onDeviceDisconnected
+// bağlantıdan ÖNCE bir kez kaydedilir).
+const deviceDisconnectListeners = new Set<() => void>();
+// Aktif bağlantının `gattserverdisconnected` dinleyicisini temizlemek için
+// tutulur. Web Bluetooth aynı fiziksel cihaz için AYNI device nesnesini
+// döndürebildiğinden, her connect'te yeni bir listener eklemek olayın birden
+// çok kez tetiklenmesine (mükerrer "bağlantı koptu" uyarısı) yol açar.
+let activeDisconnectCleanup: (() => void) | null = null;
+const emitDeviceDisconnected = () => {
+  deviceDisconnectListeners.forEach((listener) => {
+    try {
+      listener();
+    } catch {
+      /* bir dinleyicinin hatası diğerlerini engellemesin */
+    }
+  });
+};
+
 export const webBackend: BluetoothApi = {
   supportsDeviceList: false,
 
@@ -120,9 +140,16 @@ export const webBackend: BluetoothApi = {
       onDataReceived,
     };
 
-    device.addEventListener?.("gattserverdisconnected", () => {
-      /* frontend tarafından disconnect çağrılabilir; burada ek cleanup yapılabilir */
-    });
+    // Önceki bağlantının kopma dinleyicisini kaldır; her zaman tek bir aktif
+    // dinleyici kalsın. (Mükerrer "bağlantı koptu" uyarılarının asıl sebebi,
+    // aynı device nesnesinde biriken çok sayıda dinleyiciydi.)
+    activeDisconnectCleanup?.();
+    const handleGattDisconnect = () => emitDeviceDisconnected();
+    device.addEventListener?.("gattserverdisconnected", handleGattDisconnect);
+    activeDisconnectCleanup = () => {
+      device.removeEventListener?.("gattserverdisconnected", handleGattDisconnect);
+      activeDisconnectCleanup = null;
+    };
 
     return connectedDevice;
   },
@@ -131,8 +158,13 @@ export const webBackend: BluetoothApi = {
     return NOOP_SUBSCRIPTION;
   },
 
-  onDeviceDisconnected(_listener: () => void): Subscription {
-    return NOOP_SUBSCRIPTION;
+  onDeviceDisconnected(listener: () => void): Subscription {
+    deviceDisconnectListeners.add(listener);
+    return {
+      remove: () => {
+        deviceDisconnectListeners.delete(listener);
+      },
+    };
   },
 };
 

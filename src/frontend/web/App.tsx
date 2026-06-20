@@ -1,16 +1,42 @@
-import React from "react";
+import React, { useEffect } from "react";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { NavigationContainer, DefaultTheme, DarkTheme } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import HomeScreen from "./HomeScreen";
 import BluetoothConnectionScreen from "./BluetoothConnectionScreen";
 import CommunicationScreen from "./CommunicationScreen";
-import { type RootStackParamList } from "./constants";
+import { type RootStackParamList, useBluetoothStore } from "./constants";
+import { useBluetooth } from "./BluetoothContext";
 import { useThemeColors, useEffectiveTheme } from "./theme";
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
 const AppNavigator = () => {
+  const bt = useBluetooth();
+  const setConnectedDevice = useBluetoothStore((state) => state.setConnectedDevice);
+  const setDeviceName = useBluetoothStore((state) => state.setDeviceName);
+  const setManuallyDisconnected = useBluetoothStore(
+    (state) => state.setManuallyDisconnected
+  );
+
+  // Cihazla bağlantı koptuğunda (güç kesilmesi / menzil dışı) kullanıcıyı uyar.
+  // Manuel kesmede (BluetoothConnection/Communication ekranları) manuallyDisconnected
+  // true'ya çekildiği için burada uyarı gösterilmez.
+  useEffect(() => {
+    const sub = bt.onDeviceDisconnected(() => {
+      setConnectedDevice(null);
+      setDeviceName(null);
+      const { manuallyDisconnected } = useBluetoothStore.getState();
+      if (!manuallyDisconnected && typeof window !== "undefined") {
+        window.alert(
+          "Bağlantı Koptu ⚠️\nCihazın gücü kesildi veya menzilden çıkıldı."
+        );
+      }
+      setManuallyDisconnected(false);
+    });
+    return () => sub.remove();
+  }, [bt]);
+
   const colors = useThemeColors();
   const effective = useEffectiveTheme();
   const base = effective === "dark" ? DarkTheme : DefaultTheme;
