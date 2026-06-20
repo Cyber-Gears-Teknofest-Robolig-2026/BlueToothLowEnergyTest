@@ -50,8 +50,26 @@ export default function BluetoothConnectionScreen() {
       setConnectedDevice(connected);
       setDeviceName(connected.name);
       setMessages([]);
-    } catch (e) {
-      // Kullanıcı port seçmeyi iptal ettiyse veya bağlantı kurulamadıysa sessiz geç.
+      // Yeni bağlantı: önceki manuel kesmeden kalan bayrağı temizle, yoksa
+      // sıradaki gerçek kopma uyarısı yanlışlıkla bastırılır.
+      setManuallyDisconnected(false);
+    } catch (e: any) {
+      // Kullanıcı port seçiciyi iptal ettiyse sessiz geç; gerçek bir bağlantı
+      // hatasında kullanıcıyı bilgilendir (aksi halde "hiç denemedi" gibi görünür).
+      const cancelled = e?.name === "NotFoundError" || e?.name === "AbortError";
+      if (!cancelled && typeof window !== "undefined") {
+        const msg = String(e?.message ?? "");
+        // "Failed to open serial port" → COM portu meşgul: çoğunlukla başka bir
+        // sekme/uygulama portu açık tutuyor ya da cihaz henüz hazır değil.
+        const busy = /failed to open/i.test(msg);
+        window.alert(
+          busy
+            ? "Bağlantı kurulamadı: Port meşgul.\n" +
+                "Bu cihaz başka bir sekmede veya uygulamada açık olabilir. " +
+                "Diğer sekmeyi kapatıp birkaç saniye sonra tekrar deneyin."
+            : "Bağlantı kurulamadı: " + (msg || "Bilinmeyen hata")
+        );
+      }
     } finally {
       setIsConnecting(false);
     }

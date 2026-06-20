@@ -172,7 +172,8 @@ export default function CommunicationScreen() {
           setConnectedDevice(null);
           setDeviceName(null);
           setMessages([]);
-          navigation.goBack();
+          // Manuel kesmede bağlantı ekranına geri dönme; kullanıcı Communication
+          // ekranında kalmaya devam etsin (android davranışıyla aynı).
         }
       }
     }
