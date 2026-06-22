@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useRef } from "react";
 import {
   View,
   Text,
@@ -34,6 +34,7 @@ export default function BluetoothConnectionScreen() {
   const navigation = useNavigation<AppNavigationProp>();
 
   const [isConnecting, setIsConnecting] = useState(false);
+  const connectionCancelledRef = useRef(false);
 
   const selectAndConnect = async () => {
     if (!(await bt.isEnabled())) {
@@ -45,22 +46,22 @@ export default function BluetoothConnectionScreen() {
       return;
     }
     try {
+      connectionCancelledRef.current = false;
       setIsConnecting(true);
       const connected = await bt.connect();
+      if (connectionCancelledRef.current) {
+        setManuallyDisconnected(true);
+        await connected.disconnect();
+        return;
+      }
       setConnectedDevice(connected);
       setDeviceName(connected.name);
       setMessages([]);
-      // Yeni bağlantı: önceki manuel kesmeden kalan bayrağı temizle, yoksa
-      // sıradaki gerçek kopma uyarısı yanlışlıkla bastırılır.
       setManuallyDisconnected(false);
     } catch (e: any) {
-      // Kullanıcı port seçiciyi iptal ettiyse sessiz geç; gerçek bir bağlantı
-      // hatasında kullanıcıyı bilgilendir (aksi halde "hiç denemedi" gibi görünür).
       const cancelled = e?.name === "NotFoundError" || e?.name === "AbortError";
-      if (!cancelled && typeof window !== "undefined") {
+      if (!cancelled && !connectionCancelledRef.current && typeof window !== "undefined") {
         const msg = String(e?.message ?? "");
-        // "Failed to open serial port" → COM portu meşgul: çoğunlukla başka bir
-        // sekme/uygulama portu açık tutuyor ya da cihaz henüz hazır değil.
         const busy = /failed to open/i.test(msg);
         window.alert(
           busy
@@ -73,6 +74,11 @@ export default function BluetoothConnectionScreen() {
     } finally {
       setIsConnecting(false);
     }
+  };
+
+  const cancelConnection = () => {
+    connectionCancelledRef.current = true;
+    setIsConnecting(false);
   };
 
   const disconnectDevice = async () => {
@@ -129,14 +135,19 @@ export default function BluetoothConnectionScreen() {
             <View style={styles.statusLabelRow}>
               <Text style={[styles.label, { color: colors.textMuted }]}>BAĞLANTI DURUMU</Text>
               {isConnecting ? (
-                <View style={styles.connectingBadge}>
+                <TouchableOpacity
+                  style={styles.connectingBadge}
+                  onPress={cancelConnection}
+                  activeOpacity={0.7}
+                >
                   <ActivityIndicator
                     size="small"
                     color="#F59E0B"
                     style={styles.smallSpinner}
                   />
                   <Text style={styles.connectingText}>Bağlanıyor...</Text>
-                </View>
+                  <Icon name="close-circle" size={14} color="#D97706" />
+                </TouchableOpacity>
               ) : connectedDevice ? (
                 <View style={styles.onlineBadge}>
                   <View style={styles.onlineDot} />
