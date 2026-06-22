@@ -6,7 +6,7 @@
  * sağlar: TX karakteristiğinden (NOTIFY) gelen base64 veriyi decode edip
  * frontend'e gönderir; yazma için RX karakteristiğine base64 ile gönderir.
  */
-import { PermissionsAndroid, Platform } from "react-native";
+import { AppState, Linking, PermissionsAndroid, Platform } from "react-native";
 import { BleManager } from "react-native-ble-plx";
 import { Buffer } from "buffer";
 import type {
@@ -27,18 +27,18 @@ const manager = new BleManager();
 let scanTimeout: ReturnType<typeof setTimeout> | null = null;
 let scanActive = false;
 
-// "Cihaz bağlantısı koptu" için global dinleyiciler. Sözleşmedeki
-// onDeviceDisconnected uygulama açılışında BİR kez (bağlantıdan ÖNCE) kaydedilir;
-// BLE'de kopma ise cihaza özeldir. Bu yüzden her bağlantıda cihazın kopma
-// olayını (manager.onDeviceDisconnected) bu global dinleyicilere köprüleriz.
-const deviceDisconnectListeners = new Set<() => void>();
+// Beklenmedik kopmalarda (güç kesildi / menzilden çıktı) frontend'i uyarmak için
+// kayıtlı dinleyiciler. Manuel kesmede de tetiklenir; frontend manuallyDisconnected
+// bayrağıyla uyarıyı bastırır (Bluetooth Classic backend ile aynı davranış).
+const disconnectListeners = new Set<() => void>();
 let activeDisconnectSub: { remove: () => void } | null = null;
-const emitDeviceDisconnected = () => {
-  deviceDisconnectListeners.forEach((listener) => {
+
+const fireDisconnectListeners = () => {
+  disconnectListeners.forEach((listener) => {
     try {
       listener();
     } catch {
-      /* bir dinleyicinin hatası diğerlerini engellemesin */
+      /* dinleyici hatasını yoksay */
     }
   });
 };
@@ -56,6 +56,55 @@ const waitForPoweredOn = (timeout = 5000) =>
       resolve(false);
     }, timeout);
   });
+
+/**
+ * Sistem "Bluetooth'u aç?" iletişim kutusunu (ACTION_REQUEST_ENABLE) gösterip
+ * kullanıcının kararını döndürür. ble-plx bu diyalogu sunmadığından, RN'in
+ * yerleşik Linking.sendIntent'i ile intent tetiklenir; sonuç doğrudan gelmediği
+ * için adaptör durumundan (onStateChange) ve uygulamaya dönüşten (AppState)
+ * çıkarılır.
+ * - Kullanıcı onaylar → adaptör PoweredOn'a geçer → true
+ * - Kullanıcı reddeder → diyalogdan dönülür, PoweredOn gelmez → false
+ */
+const requestBluetoothEnable = async (): Promise<boolean> => {
+  try {
+    await Linking.sendIntent("android.bluetooth.adapter.action.REQUEST_ENABLE");
+  } catch (error) {
+    console.log("Bluetooth enable intent başlatılamadı:", error);
+    return false;
+  }
+
+  return new Promise<boolean>((resolve) => {
+    let settled = false;
+    let graceTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const finish = (value: boolean) => {
+      if (settled) return;
+      settled = true;
+      try { stateSub.remove(); } catch { }
+      try { appSub.remove(); } catch { }
+      if (graceTimer) clearTimeout(graceTimer);
+      clearTimeout(maxTimer);
+      resolve(value);
+    };
+
+    // Adaptör açılırsa (kullanıcı onayladı) hemen başarı dön.
+    const stateSub = manager.onStateChange((state) => {
+      if (state === "PoweredOn") finish(true);
+    }, true);
+
+    // Kullanıcı diyalogdan uygulamaya dönerse: açılmanın tamamlanması için kısa
+    // ek süre tanı; süre dolar ve hâlâ açık değilse reddedilmiş say.
+    const appSub = AppState.addEventListener("change", (s) => {
+      if (s === "active" && !graceTimer) {
+        graceTimer = setTimeout(() => finish(false), 4000);
+      }
+    });
+
+    // Güvenlik: kullanıcı diyaloğa hiç yanıt vermezse askıda kalma.
+    const maxTimer = setTimeout(() => finish(false), 30000);
+  });
+};
 
 const base64FromUtf8 = (s: string) => Buffer.from(s, "utf-8").toString("base64");
 const utf8FromBase64 = (b?: string) => (b ? Buffer.from(b, "base64").toString("utf-8") : "");
@@ -90,8 +139,17 @@ export const androidBackend: BluetoothApi = {
   },
 
   async ensureEnabled() {
-    // Mobil platformlarda kullanıcıya açtırma diyalogu yok; yalnızca state kontrolü.
-    return await waitForPoweredOn(3000);
+    // Zaten açıksa hemen dön.
+    try {
+      if ((await manager.state()) === "PoweredOn") return true;
+    } catch { }
+
+    // Kapalıysa: uygulama içi "Bluetooth'u açın" uyarısı vermek yerine sistemin
+    // kendi "Bluetooth'u aç?" iletişim kutusunu göster (react-native-bluetooth-
+    // classic'teki requestBluetoothEnabled ile aynı). ble-plx bunu sunmadığından
+    // RN'in Linking.sendIntent'i üzerinden ACTION_REQUEST_ENABLE tetiklenir.
+    if (Platform.OS !== "android") return false;
+    return await requestBluetoothEnable();
   },
 
   async startScan({ onDevice, onError, onComplete }: ScanHandlers) {
@@ -154,14 +212,15 @@ export const androidBackend: BluetoothApi = {
     const dev = await manager.connectToDevice(device.id, { timeout: 10000 });
     await dev.discoverAllServicesAndCharacteristics();
 
-    // Bağlantı koptuğunda (güç kesilmesi / menzil dışı / BT kapanması) global
-    // "bağlantı koptu" dinleyicilerini tetikle. Önceki cihazın aboneliğini
-    // temizleyip bu cihaz için yenisini kur.
-    activeDisconnectSub?.remove();
-    const disconnectSub = manager.onDeviceDisconnected(dev.id, () => {
-      emitDeviceDisconnected();
+    // Cihaz beklenmedik şekilde koparsa kayıtlı dinleyicileri tetikle. Önceki
+    // bağlantıdan kalan aboneliği temizleyerek mükerrer bildirimi önle.
+    try {
+      activeDisconnectSub?.remove();
+    } catch { }
+    activeDisconnectSub = manager.onDeviceDisconnected(dev.id, () => {
+      activeDisconnectSub = null;
+      fireDisconnectListeners();
     });
-    activeDisconnectSub = { remove: () => disconnectSub.remove() };
 
     // Monitor TX characteristic (notify)
     const subscription = manager.monitorCharacteristicForDevice(
@@ -186,6 +245,10 @@ export const androidBackend: BluetoothApi = {
     };
 
     const disconnect = async () => {
+      try {
+        activeDisconnectSub?.remove();
+        activeDisconnectSub = null;
+      } catch { }
       try {
         subscription.remove();
       } catch { }
@@ -228,14 +291,10 @@ export const androidBackend: BluetoothApi = {
   },
 
   onDeviceDisconnected(listener: () => void): Subscription {
-    // Global dinleyiciye ekle; gerçek kopma, cihaz bağlandığında kurulan
-    // manager.onDeviceDisconnected aboneliği (bkz. connect) ile tetiklenir.
-    deviceDisconnectListeners.add(listener);
-    return {
-      remove: () => {
-        deviceDisconnectListeners.delete(listener);
-      },
-    };
+    // Aktif cihaz koptuğunda connect() içinde bağlanan monitor bu dinleyicileri
+    // tetikler. Frontend (App.tsx) bunu yakalayıp "Bağlantı Koptu" uyarısı verir.
+    disconnectListeners.add(listener);
+    return { remove: () => { disconnectListeners.delete(listener); } };
   },
 };
 

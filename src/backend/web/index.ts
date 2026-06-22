@@ -22,22 +22,23 @@ const NOOP_SUBSCRIPTION: Subscription = { remove: () => {} };
 const hasWebBluetooth = () =>
   typeof navigator !== "undefined" && !!(navigator as any).bluetooth;
 
-// "Cihaz bağlantısı koptu" için global dinleyiciler. Web Bluetooth kopmayı
-// device üzerindeki `gattserverdisconnected` olayıyla bildirir; her bağlantıda
-// o olayı bu dinleyicilere köprüleriz (sözleşmedeki onDeviceDisconnected
-// bağlantıdan ÖNCE bir kez kaydedilir).
-const deviceDisconnectListeners = new Set<() => void>();
-// Aktif bağlantının `gattserverdisconnected` dinleyicisini temizlemek için
-// tutulur. Web Bluetooth aynı fiziksel cihaz için AYNI device nesnesini
-// döndürebildiğinden, her connect'te yeni bir listener eklemek olayın birden
-// çok kez tetiklenmesine (mükerrer "bağlantı koptu" uyarısı) yol açar.
-let activeDisconnectCleanup: (() => void) | null = null;
-const emitDeviceDisconnected = () => {
-  deviceDisconnectListeners.forEach((listener) => {
+/* --------------------------------------------------------------------------
+ * KOPMA TAKİBİ (tek seferde tek bağlantı)
+ * Beklenmedik kopmada (cihaz çıkarıldı / güç kesildi / menzilden çıktı) frontend'i
+ * uyarmak için dinleyicileri tetikleriz. Manuel kesmede tetiklemeyiz (Web Serial
+ * backend ile aynı davranış); frontend yine de manuallyDisconnected bayrağını
+ * kontrol eder.
+ * ------------------------------------------------------------------------ */
+const disconnectListeners = new Set<() => void>();
+let activeServer: any = null;
+let manualDisconnect = false;
+
+const fireDisconnectListeners = () => {
+  disconnectListeners.forEach((listener) => {
     try {
       listener();
     } catch {
-      /* bir dinleyicinin hatası diğerlerini engellemesin */
+      /* dinleyici hatasını yoksay */
     }
   });
 };
@@ -75,6 +76,9 @@ export const webBackend: BluetoothApi = {
       optionalServices: [SERVICE_UUID],
     });
     const server = await device.gatt.connect();
+    // Aktif bağlantıyı kaydet; kopma olayını yalnızca bu sunucu için işleriz.
+    activeServer = server;
+    manualDisconnect = false;
     const service = await server.getPrimaryService(SERVICE_UUID);
     const rxChar = await service.getCharacteristic(RX_UUID);
     const txChar = await service.getCharacteristic(TX_UUID);
@@ -102,6 +106,8 @@ export const webBackend: BluetoothApi = {
     };
 
     const disconnect = async () => {
+      // Manuel kesme: gattserverdisconnected olayında kopma bildirimi tetiklenmesin.
+      manualDisconnect = true;
       try {
         await server.disconnect();
       } catch {}
@@ -140,16 +146,15 @@ export const webBackend: BluetoothApi = {
       onDataReceived,
     };
 
-    // Önceki bağlantının kopma dinleyicisini kaldır; her zaman tek bir aktif
-    // dinleyici kalsın. (Mükerrer "bağlantı koptu" uyarılarının asıl sebebi,
-    // aynı device nesnesinde biriken çok sayıda dinleyiciydi.)
-    activeDisconnectCleanup?.();
-    const handleGattDisconnect = () => emitDeviceDisconnected();
-    device.addEventListener?.("gattserverdisconnected", handleGattDisconnect);
-    activeDisconnectCleanup = () => {
-      device.removeEventListener?.("gattserverdisconnected", handleGattDisconnect);
-      activeDisconnectCleanup = null;
-    };
+    device.addEventListener?.("gattserverdisconnected", () => {
+      // Yalnızca hâlâ aktif bağlantı buysa ele al (eski cihaz olaylarını yoksay).
+      if (activeServer !== server) return;
+      activeServer = null;
+      const wasManual = manualDisconnect;
+      manualDisconnect = false;
+      // Manuel kesmede uyarı verme; yalnızca beklenmedik kopmada dinleyicileri tetikle.
+      if (!wasManual) fireDisconnectListeners();
+    });
 
     return connectedDevice;
   },
@@ -159,12 +164,10 @@ export const webBackend: BluetoothApi = {
   },
 
   onDeviceDisconnected(listener: () => void): Subscription {
-    deviceDisconnectListeners.add(listener);
-    return {
-      remove: () => {
-        deviceDisconnectListeners.delete(listener);
-      },
-    };
+    // GATT sunucusu beklenmedik şekilde koptuğunda (gattserverdisconnected) bu
+    // dinleyiciler tetiklenir. Frontend (App.tsx) "Bağlantı koptu" uyarısı verir.
+    disconnectListeners.add(listener);
+    return { remove: () => disconnectListeners.delete(listener) };
   },
 };
 
