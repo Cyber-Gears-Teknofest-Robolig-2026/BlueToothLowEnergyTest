@@ -2,8 +2,10 @@ import React from "react";
 import { LogBox, Platform } from "react-native";
 import WebApp from "@/src/frontend/web/App";
 import AndroidApp from "@/src/frontend/android/App";
+import IosApp from "@/src/frontend/ios/App";
 import { BluetoothProvider as WebBluetoothProvider } from "@/src/frontend/web/BluetoothContext";
 import { BluetoothProvider as AndroidBluetoothProvider } from "@/src/frontend/android/BluetoothContext";
+import { BluetoothProvider as IosBluetoothProvider } from "@/src/frontend/ios/BluetoothContext";
 import type { BluetoothApi } from "@/src/backend";
 
 // @react-navigation/elements v2.x hâlâ `pointerEvents` prop'unu kullanıyor;
@@ -37,7 +39,8 @@ function loadBackend(): BluetoothApi | null {
         return require("./backend/web").default as BluetoothApi;
       case "android":
         return require("./backend/android").default as BluetoothApi;
-      // add `case "ios":` here when an iOS backend is available
+      case "ios":
+        return require("./backend/ios").default as BluetoothApi;
       default:
         return null;
     }
@@ -61,7 +64,10 @@ export default function App() {
       PlatformApp = AndroidApp;
       PlatformBluetoothProvider = AndroidBluetoothProvider;
       break;
-    // add `case "ios":` here when iOS frontend/provider exist
+    case "ios":
+      PlatformApp = IosApp;
+      PlatformBluetoothProvider = IosBluetoothProvider;
+      break;
     default:
       // fallback to Android for now; change as platforms are added
       PlatformApp = AndroidApp;
